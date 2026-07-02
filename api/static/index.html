@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conductor Voice Agent</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Conductor">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <link rel="mask-icon" href="/static/icon.svg" color="#14b8a6">
+    <meta name="msapplication-TileColor" content="#0b1120">
+    <meta name="theme-color" content="#0b1120">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar" id="sidebar">
+            <button class="new-chat-btn" id="newChatButton">＋ New chat</button>
+            <div class="sidebar-history">
+                <p class="sidebar-empty">No conversation history yet</p>
+            </div>
+            <div class="sidebar-footer">
+                <div class="status-strip" id="connectionStatus">
+                    <span>Checking status…</span>
+                </div>
+            </div>
+        </aside>
+
+        <div class="main">
+            <header class="main-header">
+                <button class="icon-button sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">☰</button>
+                <h1>🎤 Conductor</h1>
+                <button class="icon-button" id="settingsToggle" aria-label="Toggle settings">⚙️</button>
+            </header>
+
+            <div class="chat-scroll" id="conversation">
+                <div id="messages">
+                    <div class="empty-state">
+                        <p class="empty-title">👋 Hi there!</p>
+                        <p class="empty-sub">Type a message or tap the mic to start talking</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="recordingIndicator" class="recording-indicator hidden">
+                <div class="wave"></div>
+                <div class="wave"></div>
+                <div class="wave"></div>
+                <div class="wave"></div>
+                <div class="wave"></div>
+            </div>
+
+            <div id="status" class="status-line">
+                <p>Type a message or tap 🎤 to talk</p>
+            </div>
+
+            <div class="composer">
+                <input id="textInput" type="text" placeholder="Message Conductor..." />
+                <button id="micButton" class="mic-button" aria-label="Voice input">🎤</button>
+                <button id="sendButton" class="send-button">Send</button>
+            </div>
+
+            <details class="settings-panel" id="settingsPanel">
+                <summary>⚙️ Settings</summary>
+                <label for="voiceSelect">Voice</label>
+                <select id="voiceSelect">
+                    <option value="nova">Nova (Clear female)</option>
+                    <option value="alloy">Alloy (Neutral)</option>
+                    <option value="echo">Echo (Male)</option>
+                    <option value="fable">Fable (British)</option>
+                    <option value="onyx">Onyx (Deep male)</option>
+                    <option value="shimmer">Shimmer (Soft female)</option>
+                </select>
+            </details>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
