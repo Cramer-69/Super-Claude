@@ -4,11 +4,13 @@ Conductor agent that uses RAG to answer questions with context from all platform
 
 from typing import List, Dict, Any
 import sys
+import json
 from pathlib import Path
 
 # Gracefully handle optional dependencies
 GOOGLE_AVAILABLE = False
 OPENAI_AVAILABLE = False
+BEDROCK_AVAILABLE = False
 
 try:
     import google.generativeai as genai
@@ -21,6 +23,12 @@ try:
     OPENAI_AVAILABLE = True
 except (ImportError, Exception) as e:
     pass
+
+try:
+    import boto3
+    BEDROCK_AVAILABLE = True
+except (ImportError, Exception) as e:
+    boto3 = None
 
 try:
     import httpx
@@ -41,7 +49,7 @@ class ConductorAgent:
         """Initialize the conductor agent.
         
         Args:
-            provider: AI provider ('google', 'grok', 'openai', 'perplexity', or 'auto')
+            provider: AI provider ('bedrock', 'google', 'grok', 'openai', 'perplexity', or 'auto')
         """
         # Try to initialize retriever, but don't crash if it fails
         try:
@@ -56,7 +64,10 @@ class ConductorAgent:
         
         # Detect available providers
         if provider == "auto":
-            if GOOGLE_AVAILABLE and settings.google_api_key:
+            if BEDROCK_AVAILABLE and settings.bedrock_configured():
+                self.provider = "bedrock"
+                self.model = settings.bedrock_model()
+            elif GOOGLE_AVAILABLE and settings.google_api_key:
                 self.provider = "google"
                 self.model = "gemini-1.5-flash"  # Working model
             elif settings.xai_api_key:
@@ -66,7 +77,9 @@ class ConductorAgent:
                 self.provider = "openai"
                 self.model = "gpt-4o-mini"
             else:
-                raise ValueError("No AI provider available. Install google-generativeai or openai.")
+                raise ValueError(
+                    "No AI provider available. Configure AWS Bedrock, Google, xAI, or OpenAI."
+                )
         
         # Initialize Skills
         skills_path = Path(__file__).parent.parent / "skills"
@@ -93,6 +106,15 @@ class ConductorAgent:
                     raise ValueError("Google API key not configured")
                 genai.configure(api_key=settings.google_api_key)
                 self.client = "gemini"  # Flag
+            elif self.provider == "bedrock":
+                if not BEDROCK_AVAILABLE:
+                    raise ValueError("boto3 is required for AWS Bedrock support")
+                if not settings.bedrock_configured():
+                    raise ValueError("AWS Bedrock not configured")
+                self.client = boto3.client(
+                    "bedrock-runtime",
+                    region_name=settings.bedrock_region()
+                )
             elif self.provider == "grok":
                 if not settings.xai_api_key:
                     raise ValueError("xAI/Grok API key not configured")
@@ -203,6 +225,25 @@ Please provide a helpful answer based on this context. Cite which conversations/
                     generation_config={"temperature": 0.7, "max_output_tokens": 1000}
                 )
                 answer = response.text
+            elif self.provider == "bedrock":
+                response = self.client.invoke_model(
+                    modelId=self.model,
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 1000,
+                        "temperature": 0.7,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_prompt}],
+                    }),
+                    accept="application/json",
+                    contentType="application/json",
+                )
+                payload = json.loads(response["body"].read())
+                answer = "".join(
+                    block.get("text", "")
+                    for block in payload.get("content", [])
+                    if block.get("type") == "text"
+                )
             elif self.provider == "grok":
                 # Use Grok/xAI
                 response = self.client.post(

@@ -26,6 +26,7 @@ This will:
 ## 🤖 Supported Providers
 
 - **Google Gemini** (Primary, Auto-configured)
+- **Claude via AWS Bedrock** (Preferred Claude base)
 - **Grok / xAI** (Added via Desktop key)
 - **Perplexity** (Search enabled)
 - **OpenAI** (Fallback)
@@ -47,9 +48,12 @@ Copy the example environment file and add your API keys:
 copy .env.example .env
 ```
 
-Edit `.env` and add your OpenAI API key:
+Edit `.env` and add either your AWS Bedrock settings or an API key:
 
 ```
+AWS_REGION=us-east-1
+AWS_BEDROCK_MODEL_ID=anthropic.claude-3-5-haiku-20241022-v1:0
+# or
 OPENAI_API_KEY=sk-your-key-here
 ```
 
@@ -241,10 +245,12 @@ Manager**. Local Docker and Render also work.
 
 ### Required env vars
 
-At least one LLM provider key:
+At least one LLM provider configuration:
 
 | Variable | Where to get it |
 |---|---|
+| `AWS_REGION` | Your AWS Bedrock region, e.g. `us-east-1` |
+| `AWS_BEDROCK_MODEL_ID` | Optional Bedrock Claude model override |
 | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
 | `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys |
 | `GOOGLE_API_KEY` | https://aistudio.google.com/app/apikey |
