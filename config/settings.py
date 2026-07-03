@@ -3,6 +3,7 @@ Configuration management for Conductor Agent.
 Loads settings from environment variables and .env file.
 """
 
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,8 @@ class Settings(BaseSettings):
     google_api_key: Optional[str] = None
     perplexity_api_key: Optional[str] = None
     xai_api_key: Optional[str] = None
+    aws_region: Optional[str] = None
+    aws_bedrock_model_id: Optional[str] = None
     
     # Model Configuration
     conductor_model: str = "gpt-4o-mini"
@@ -78,10 +81,31 @@ class Settings(BaseSettings):
     def validate_api_keys(self) -> bool:
         """Check if at least one LLM API key is configured."""
         return any([
+            self.bedrock_configured(),
             self.openai_api_key,
             self.anthropic_api_key,
             self.google_api_key
         ])
+
+    def bedrock_region(self) -> Optional[str]:
+        """Return configured AWS Bedrock region, honoring AWS defaults."""
+        return (
+            os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+            or self.aws_region
+        )
+
+    def bedrock_model(self) -> str:
+        """Return configured AWS Bedrock Claude model."""
+        return (
+            os.getenv("AWS_BEDROCK_MODEL_ID")
+            or self.aws_bedrock_model_id
+            or "anthropic.claude-3-5-haiku-20241022-v1:0"
+        )
+
+    def bedrock_configured(self) -> bool:
+        """Check whether AWS Bedrock Claude is configured."""
+        return bool(self.bedrock_region())
 
     def configured_providers(self) -> list[str]:
         """Return names of providers with a non-placeholder key set."""
@@ -92,10 +116,13 @@ class Settings(BaseSettings):
             "xai": self.xai_api_key,
             "perplexity": self.perplexity_api_key,
         }
-        return [
+        providers = [
             name for name, key in candidates.items()
             if key and not key.startswith("your_")
         ]
+        if self.bedrock_configured():
+            providers.insert(0, "bedrock")
+        return providers
 
     def require_api_key(self) -> None:
         """Fail fast at startup with an actionable error if no key is set."""
@@ -103,6 +130,7 @@ class Settings(BaseSettings):
             return
         raise RuntimeError(
             "No LLM API key is configured.\n"
+            "  - Bedrock:   set AWS_REGION (and optionally AWS_BEDROCK_MODEL_ID)\n"
             "  - Local:     copy .env.example -> .env and set OPENAI_API_KEY=sk-...\n"
             "  - Docker:    docker run -e OPENAI_API_KEY=sk-... -p 8080:8080 <image>\n"
             "  - Cloud Run: gcloud run deploy --set-secrets "

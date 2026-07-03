@@ -147,8 +147,8 @@ async def _startup_log_config():
         logger.info(f"Configured LLM providers: {', '.join(providers)}")
     else:
         logger.warning(
-            "No LLM API key configured. The /api/chat endpoint will fail "
-            "until OPENAI_API_KEY (or another provider key) is set. "
+            "No LLM provider configured. The /api/chat endpoint will fail "
+            "until AWS_REGION (for Bedrock Claude) or another provider key is set. "
             "See README -> Deploy."
         )
 

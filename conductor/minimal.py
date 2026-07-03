@@ -1,15 +1,20 @@
 """
 Minimal, dependency-light conductor used in cloud or fallback mode.
-Calls whichever LLM provider has a key set (Google/Gemini, OpenAI,
-Anthropic, or xAI/Grok). No ChromaDB, no heavy local deps.
+Calls whichever LLM provider has a key set (AWS Bedrock Claude,
+Google/Gemini, OpenAI, Anthropic, or xAI/Grok). No ChromaDB, no heavy
+local deps.
 """
+import json
 import os
 from typing import Dict, Any, Iterator
+from config.settings import settings
 from utils.logger import logger
 
 
 def _provider_for_keys() -> tuple:
     """Pick (provider, model) based on which env var is set."""
+    if settings.bedrock_configured():
+        return "bedrock", settings.bedrock_model()
     if os.getenv("GOOGLE_API_KEY"):
         return "google", "gemini-1.5-flash"
     if os.getenv("OPENAI_API_KEY", "").startswith("sk-"):
@@ -43,6 +48,29 @@ class MinimalConductor:
         model = genai.GenerativeModel(self.model, system_instruction=self._system_prompt())
         resp = model.generate_content(query)
         return resp.text or ""
+
+    def _call_bedrock(self, query: str) -> str:
+        import boto3
+
+        client = boto3.client("bedrock-runtime", region_name=settings.bedrock_region())
+        payload = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1024,
+            "system": self._system_prompt(),
+            "messages": [{"role": "user", "content": query}],
+        }
+        resp = client.invoke_model(
+            modelId=self.model,
+            body=json.dumps(payload),
+            accept="application/json",
+            contentType="application/json",
+        )
+        data = json.loads(resp["body"].read())
+        return "".join(
+            block.get("text", "")
+            for block in data.get("content", [])
+            if block.get("type") == "text"
+        )
 
     def _call_openai(self, query: str) -> str:
         from openai import OpenAI
@@ -81,7 +109,9 @@ class MinimalConductor:
 
     def chat(self, query: str, platform_filter: str = None) -> Dict[str, Any]:
         try:
-            if self.provider == "google":
+            if self.provider == "bedrock":
+                text = self._call_bedrock(query)
+            elif self.provider == "google":
                 text = self._call_google(query)
             elif self.provider == "openai":
                 text = self._call_openai(query)
@@ -92,7 +122,8 @@ class MinimalConductor:
             else:
                 text = (
                     "Minimal mode: no AI provider configured. "
-                    "Set OPENAI_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY or XAI_API_KEY."
+                    "Set AWS_REGION (for Bedrock Claude), OPENAI_API_KEY, "
+                    "GOOGLE_API_KEY, ANTHROPIC_API_KEY or XAI_API_KEY."
                 )
         except Exception as e:
             logger.error(f"MinimalConductor provider call failed ({self.provider}): {e}")
