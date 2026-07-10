@@ -2,12 +2,12 @@
 
 ## What You Have Now
 
-✅ Complete voice-enabled web application  
-✅ Mobile-responsive interface with beautiful UI  
-✅ Full backend API with Whisper + TTS  
-✅ Dockerized Python service ready for Cloud Run or Render  
-✅ PWA support (installable on phone)  
-✅ `.env` ignored by git so secrets stay out of the repository  
+- Complete voice-enabled web application  
+- Mobile-responsive interface with beautiful UI  
+- Full backend API with Whisper + TTS  
+- Dockerized Python service ready for Cloud Run or Render  
+- PWA support (installable on phone)  
+- `.env` ignored by git so secrets stay out of the repository  
 
 ---
 
@@ -68,7 +68,7 @@ gcloud services enable run.googleapis.com \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com
 
-echo -n "<your-openai-api-key>" | \
+echo -n "YOUR_OPENAI_API_KEY" | \
   gcloud secrets create openai-api-key --data-file=-
 
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
