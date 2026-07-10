@@ -33,10 +33,10 @@ Use Render only if you prefer it over Cloud Run.
 
 ## Step 2: Push This Code to GitHub
 
-From `/home/runner/work/Super-Claude/Super-Claude`:
+From your project root:
 
 ```bash
-cd /home/runner/work/Super-Claude/Super-Claude
+cd /path/to/your/project
 
 # If needed, initialize git
 # git init
@@ -62,12 +62,13 @@ git push -u origin main
 5. Deploy from the repository root:
 
 ```bash
+export PROJECT_ID=your-project-id
 gcloud config set project $PROJECT_ID
 gcloud services enable run.googleapis.com \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com
 
-echo -n "sk-your-openai-key" | \
+echo -n "<your-openai-api-key>" | \
   gcloud secrets create openai-api-key --data-file=-
 
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')

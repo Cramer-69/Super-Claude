@@ -312,9 +312,8 @@ Recommended order:
 2. Deploy the container to Cloud Run.
 3. Put your domain on Cloudflare and point a subdomain at the Cloud Run service.
 
-Keep `.env` local only. This repo already ignores `.env` in
-`/home/runner/work/Super-Claude/Super-Claude/.gitignore`, so only commit
-`.env.example`.
+Keep `.env` local only. This repo already ignores `.env` in `.gitignore`, so
+only commit `.env.example`.
 
 ### Cloudflare custom domain
 
