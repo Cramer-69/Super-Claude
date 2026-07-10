@@ -304,6 +304,42 @@ gcloud run deploy conductor-agent \
 The deploy URL appears at the end. Hit `/health` to confirm
 `api_keys_configured: true`.
 
+### GitHub + Cloudflare + Cloud Run rollout
+
+Recommended order:
+
+1. Push this repository to GitHub.
+2. Deploy the container to Cloud Run.
+3. Put your domain on Cloudflare and point a subdomain at the Cloud Run service.
+
+Keep `.env` local only. This repo already ignores `.env` in
+`/home/runner/work/Super-Claude/Super-Claude/.gitignore`, so only commit
+`.env.example`.
+
+### Cloudflare custom domain
+
+After Cloud Run is working, connect Cloudflare in front of it:
+
+1. Add your domain to Cloudflare.
+2. In Google Cloud Run, add a custom domain mapping for your app hostname
+   (for example `app.example.com`).
+3. In Cloudflare DNS, create the record Cloud Run asks for.
+4. Keep SSL enabled in Cloudflare and verify the app over HTTPS.
+5. Test `/health` through the Cloudflare hostname before sharing the app.
+
+Use this approach if your goal is to get the existing Python app live behind
+Cloudflare without rewriting it.
+
+### Cloudflare Workers / workers-sdk
+
+This repository is **not** a drop-in Cloudflare Workers app. The current
+deployment model is a long-running Python web server started from
+`api/server.py` with Gunicorn/Uvicorn. There is no Worker entrypoint, Wrangler
+configuration, or Workers-compatible runtime layer in this repo today.
+
+If you want Cloudflare Workers, treat that as a future migration or edge-layer
+project rather than a simple deploy target swap.
+
 To rotate the key:
 
 ```bash
