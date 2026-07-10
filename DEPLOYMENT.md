@@ -1,66 +1,114 @@
-# 🚀 Deployment Guide - Conductor Voice Agent
+# 🚀 Deployment Guide - GitHub + Cloudflare + Cloud Run
 
 ## What You Have Now
 
-✅ Complete voice-enabled web application  
-✅ Mobile-responsive interface with beautiful UI  
-✅ Full backend API with Whisper + TTS  
-✅ Deployment configuration for Render.com  
-✅ PWA support (installable on phone)  
+- Complete voice-enabled web application  
+- Mobile-responsive interface with beautiful UI  
+- Full backend API with Whisper + TTS  
+- Dockerized Python service ready for Cloud Run or Render  
+- PWA support (installable on phone)  
+- `.env` ignored by git so secrets stay out of the repository  
 
 ---
 
-## 🎯 Quick Deploy to Render.com
+## 🎯 Recommended Deployment Path
 
-### Step 1: Create GitHub Repository
+This repository is a **Python containerized web app**, not a Cloudflare Worker.
+The lowest-risk path is:
+
+1. Push the repository to GitHub  
+2. Deploy the app to **Google Cloud Run**  
+3. Put **Cloudflare** in front of it for DNS, SSL, and your custom domain  
+
+Use Render only if you prefer it over Cloud Run.
+
+---
+
+## Step 1: Create or Use a GitHub Repository
 
 1. Go to [github.com](https://github.com) and sign in  
-2. Click **"New repository"**  
-3. Name it `conductor-voice-agent`  
-4. Make it **Private** (your API key is involved)  
-5. Click **"Create repository"**  
+2. Create a new repository or choose an existing private repository  
+3. Do **not** commit API keys or a filled-in `.env` file  
+4. Keep `.env.example` committed as the template  
 
-### Step 2: Push Code to GitHub
+## Step 2: Push This Code to GitHub
 
-Open PowerShell in your conductor_agent folder:
+From your project root:
 
-```powershell
-cd "c:\Users\jjc29\antigravity agent 1\conductor_agent"
+```bash
+cd /path/to/your/project
 
-# Initialize git
-git init
+# If needed, initialize git
+# git init
+
 git add .
-git commit -m "Initial commit - Conductor Voice Agent"
+git commit -m "Initial commit"
 
 # Connect to GitHub (replace YOUR_USERNAME)
-git remote add origin https://github.com/YOUR_USERNAME/conductor-voice-agent.git
+git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
 git branch -M main
 git push -u origin main
 ```
 
-### Step 3: Deploy on Render
+## Step 3: Deploy to Google Cloud Run
+
+1. Install and sign in to the [Google Cloud SDK](https://cloud.google.com/sdk)  
+2. Pick a Google Cloud project  
+3. Enable:
+   - Cloud Run
+   - Artifact Registry
+   - Secret Manager
+4. Store your API key in Secret Manager  
+5. Deploy from the repository root:
+
+```bash
+export PROJECT_ID=your-project-id
+gcloud config set project $PROJECT_ID
+gcloud services enable run.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com
+
+echo -n "YOUR_OPENAI_API_KEY" | \
+  gcloud secrets create openai-api-key --data-file=-
+
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+gcloud secrets add-iam-policy-binding openai-api-key \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+gcloud run deploy conductor-agent \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-secrets OPENAI_API_KEY=openai-api-key:latest
+```
+
+6. Open the deploy URL and check `/health`  
+7. Confirm `api_keys_configured` is `true`
+
+## Step 4: Add Cloudflare in Front of the App
+
+1. Add your domain to [Cloudflare](https://www.cloudflare.com/)  
+2. In Cloud Run, add a custom domain for your service, such as `app.example.com`  
+3. Copy the DNS record values Google provides  
+4. In Cloudflare DNS, create the required record  
+5. Leave the record proxied if you want Cloudflare SSL/CDN in front  
+6. Wait for certificate and DNS propagation  
+7. Test:
+   - `https://your-domain/`
+   - `https://your-domain/health`
+
+## Step 5: Optional Render Path
+
+If you do not want Cloud Run, the repo also includes `render.yaml`:
 
 1. Go to [render.com](https://render.com)  
-2. Click **"Sign Up"** → Sign in with GitHub  
-3. Click **"New +"** → **"Web Service"**  
-4. Connect your `conductor-voice-agent` repository  
-5. Render will auto-detect the `render.yaml` file  
-6. Click **"Apply"**
-
-### Step 4: Add Environment Variables
-
-In Render dashboard:
-1. Go to your service → **"Environment"**  
-2. Add these variables:
-   - `OPENAI_API_KEY` = `your-actual-api-key`
-   - `PYTHON_VERSION` = `3.11.0`
-3. Click **"Save Changes"**
-
-### Step 5: Deploy!
-
-1. Click **"Manual Deploy"** → **"Deploy latest commit"**  
-2. Wait 5-10 minutes for build  
-3. You'll get a URL like: `https://conductor-voice-agent.onrender.com`
+2. Sign in with GitHub  
+3. Create a new Web Service from this repository  
+4. Let Render detect `render.yaml`  
+5. Set `OPENAI_API_KEY` in the Render dashboard  
+6. Deploy and test `/health`  
+7. Then connect Cloudflare to the Render hostname or custom domain
 
 ---
 
@@ -108,15 +156,24 @@ Now you have an app icon on your home screen! 🎉
 
 ## 🔧 Troubleshooting
 
+### "Can I deploy this directly with workers-sdk?"
+- Not as-is. This repo is a Python server app, not a Cloudflare Worker.
+- A Workers deploy would require a separate entrypoint and architectural changes.
+
+### "Cloudflare is up but the app fails"
+- Confirm the Cloud Run or Render origin works before testing through Cloudflare
+- Check that your DNS record matches the target provided by your host
+- Verify SSL mode and wait for DNS propagation
+
 ### "Microphone access denied"
 - Go to browser settings → Permissions → Allow microphone for this site
 
 ### "API error"
-- Check that `OPENAI_API_KEY` is set correctly in Render dashboard
+- Check that `OPENAI_API_KEY` is set correctly in Cloud Run Secret Manager or Render dashboard
 - Make sure you have OpenAI API credits
 
 ### "No response"
-- Check Render logs: Dashboard → Logs  
+- Check Cloud Run logs or Render logs  
 - Make sure the ingestion completed (vector database has data)
 
 ### App won't install
@@ -126,6 +183,10 @@ Now you have an app icon on your home screen! 🎉
 ---
 
 ## 💰 Costs
+
+### Cloud Run Hosting:
+- Usage-based pricing  
+- Usually the best fit for this repo because the container is already ready
 
 ### Render Hosting:
 - **Free tier**: Free! (sleeps after 15min inactivity)  
@@ -146,9 +207,10 @@ You now have:
 - ✅ Voice AI accessible from your phone  
 - ✅ Remembers all your conversations  
 - ✅ Works anywhere with internet  
+- ✅ Can sit behind your Cloudflare domain  
 - ✅ Professional UI  
 - ✅ Installable as an app  
 
-**Your conductor agent is live! 🚀**
+**Your conductor agent is live behind GitHub + Cloud Run + Cloudflare! 🚀**
 
-Need help? Check the Render logs or update your OpenAI API key in the dashboard.
+Need help? Check your Cloud Run or Render logs and confirm the API key is being injected securely.
