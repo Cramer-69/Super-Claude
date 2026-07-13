@@ -28,3 +28,4 @@ data/processed/
 .idea/
 *.swp
 .DS_Store
+.wrangler/

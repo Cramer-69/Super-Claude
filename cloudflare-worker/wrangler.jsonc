@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "super-chat-worker",
+  "main": "src/index.js",
+  "workers_dev": true,
+  "compatibility_date": "2026-07-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ALLOWED_ORIGIN": "*",
+    "OPENAI_MODEL": "gpt-5.4-mini"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "d1-rest-db",
+      "database_id": "d1040f9c-83d9-43c0-9d6b-3a7068508613"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
