@@ -161,6 +161,76 @@ async function chat(request, env, openAICompatible) {
   return json({ response: result.text, model: env.OPENAI_MODEL || "gpt-5.4-mini" }, 200, env);
 }
 
+function mcpResponse(id, result, env) {
+  return json({ jsonrpc: "2.0", id, result }, 200, env);
+}
+
+function mcpText(value) {
+  return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }] };
+}
+
+const mcpTools = [
+  { name: "conductor_health", description: "Check the Ara conductor, memory, and provider status.", inputSchema: { type: "object", properties: {} } },
+  { name: "list_memories", description: "List saved memories for the current user.", inputSchema: { type: "object", properties: { user_id: { type: "string" } } } },
+  { name: "save_memory", description: "Save an important memory for later conversations.", inputSchema: { type: "object", required: ["content"], properties: { user_id: { type: "string" }, content: { type: "string" }, kind: { type: "string" }, metadata: { type: "object" } } } },
+  { name: "list_tasks", description: "List the current user's tasks.", inputSchema: { type: "object", properties: { user_id: { type: "string" } } } },
+  { name: "save_task", description: "Create or update a task.", inputSchema: { type: "object", required: ["title"], properties: { id: { type: "string" }, user_id: { type: "string" }, title: { type: "string" }, details: { type: "string" }, status: { type: "string" }, priority: { type: "string" } } } },
+  { name: "web_search", description: "Search the live web and return a cited answer.", inputSchema: { type: "object", required: ["query"], properties: { query: { type: "string" } } } },
+];
+
+async function handleMcp(request, env) {
+  const rpc = await bodyJson(request);
+  if (rpc.method === "notifications/initialized") return new Response(null, { status: 202, headers: cors(env) });
+  if (rpc.method === "initialize") {
+    return mcpResponse(rpc.id, {
+      protocolVersion: rpc.params?.protocolVersion || "2025-03-26",
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: "ara-conductor", version: "1.0.0" },
+    }, env);
+  }
+  if (rpc.method === "tools/list") return mcpResponse(rpc.id, { tools: mcpTools }, env);
+  if (rpc.method !== "tools/call") {
+    return json({ jsonrpc: "2.0", id: rpc.id ?? null, error: { code: -32601, message: "Method not found" } }, 200, env);
+  }
+
+  const name = rpc.params?.name;
+  const args = rpc.params?.arguments || {};
+  const uid = String(args.user_id || "default").slice(0, 128);
+  if (name === "conductor_health") {
+    return mcpResponse(rpc.id, mcpText({ status: "ok", openai: Boolean(env.OPENAI_API_KEY), memory: Boolean(env.DB) }), env);
+  }
+  if (name === "list_memories") {
+    const rows = await env.DB.prepare("SELECT id, kind, content, metadata, created_at, updated_at FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT 200").bind(uid).all();
+    return mcpResponse(rpc.id, mcpText({ memories: rows.results || [] }), env);
+  }
+  if (name === "save_memory") {
+    if (!args.content) throw new Error("content is required");
+    const id = args.id || uuid();
+    const timestamp = now();
+    await env.DB.prepare("INSERT INTO memories (id, user_id, kind, content, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, content = excluded.content, metadata = excluded.metadata, updated_at = excluded.updated_at")
+      .bind(id, uid, String(args.kind || "note"), String(args.content), JSON.stringify(args.metadata || {}), timestamp, timestamp).run();
+    return mcpResponse(rpc.id, mcpText({ ok: true, id, updated_at: timestamp }), env);
+  }
+  if (name === "list_tasks") {
+    const rows = await env.DB.prepare("SELECT id, title, details, status, priority, created_at, updated_at FROM tasks WHERE user_id = ? ORDER BY updated_at DESC LIMIT 200").bind(uid).all();
+    return mcpResponse(rpc.id, mcpText({ tasks: rows.results || [] }), env);
+  }
+  if (name === "save_task") {
+    if (!args.title) throw new Error("title is required");
+    const id = args.id || uuid();
+    const timestamp = now();
+    await env.DB.prepare("INSERT INTO tasks (id, user_id, title, details, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, details = excluded.details, status = excluded.status, priority = excluded.priority, updated_at = excluded.updated_at")
+      .bind(id, uid, String(args.title), String(args.details || ""), String(args.status || "open"), String(args.priority || "normal"), timestamp, timestamp).run();
+    return mcpResponse(rpc.id, mcpText({ ok: true, id, updated_at: timestamp }), env);
+  }
+  if (name === "web_search") {
+    if (!args.query) throw new Error("query is required");
+    const result = await callOpenAI(env, [{ role: "user", content: String(args.query) }], true);
+    return mcpResponse(rpc.id, mcpText(result.text), env);
+  }
+  return json({ jsonrpc: "2.0", id: rpc.id ?? null, error: { code: -32602, message: `Unknown tool: ${name}` } }, 200, env);
+}
+
 const page = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ara Conductor</title><style>
@@ -184,10 +254,12 @@ export default {
         service: "ara-conductor",
         providers: { openai: Boolean(env.OPENAI_API_KEY), perplexity: Boolean(env.PERPLEXITY_API_KEY), anthropic: Boolean(env.ANTHROPIC_API_KEY) },
         memory: Boolean(env.DB),
+        mcp: "/mcp",
       }, 200, env);
     }
     if (!authorized(request, env)) return json({ error: "unauthorized" }, 401, env);
     try {
+      if (url.pathname === "/mcp" && request.method === "POST") return await handleMcp(request, env);
       if (url.pathname === "/api/chat" && request.method === "POST") return await chat(request, env, false);
       if (url.pathname === "/v1/chat/completions" && request.method === "POST") return await chat(request, env, true);
       if (url.pathname === "/api/memories" && request.method === "GET") return await listMemories(request, env);
