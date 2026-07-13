@@ -77,6 +77,29 @@ async function callOpenAI(env, messages, useWebSearch) {
   return { text: outputText(data), raw: data };
 }
 
+async function proxyOpenAIResponses(request, env) {
+  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
+  const payload = await bodyJson(request);
+  payload.model = env.OPENAI_MODEL || "gpt-5.4-mini";
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return new Response(response.body, {
+    status: response.status,
+    headers: {
+      "content-type": response.headers.get("content-type") || "application/json; charset=utf-8",
+      ...cors(env),
+    },
+  });
+}
+
 async function listMemories(request, env) {
   const result = await env.DB.prepare(
     "SELECT id, kind, content, metadata, created_at, updated_at FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT 200",
@@ -262,6 +285,7 @@ export default {
       if (url.pathname === "/mcp" && request.method === "POST") return await handleMcp(request, env);
       if (url.pathname === "/api/chat" && request.method === "POST") return await chat(request, env, false);
       if (url.pathname === "/v1/chat/completions" && request.method === "POST") return await chat(request, env, true);
+      if (url.pathname === "/v1/responses" && request.method === "POST") return await proxyOpenAIResponses(request, env);
       if (url.pathname === "/api/memories" && request.method === "GET") return await listMemories(request, env);
       if (url.pathname === "/api/memories" && request.method === "POST") return await saveMemory(request, env);
       if (url.pathname.startsWith("/api/memories/") && request.method === "DELETE") return await deleteMemory(request, env, decodeURIComponent(url.pathname.slice(14)));
