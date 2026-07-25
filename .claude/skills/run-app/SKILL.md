@@ -25,27 +25,46 @@ to import the app, though minimal mode never uses them at runtime.
 
 ```bash
 pip install fastapi 'uvicorn[standard]' pydantic pydantic-settings \
-  python-dotenv openai python-multipart
+  python-dotenv openai python-multipart rich
 # needed only so the module imports; not used in minimal mode:
-pip install --ignore-installed PyYAML chromadb tiktoken
+pip install chromadb tiktoken
 ```
 
-The `--ignore-installed PyYAML` avoids a "Cannot uninstall PyYAML … RECORD
-file not found" error from the Debian-managed system PyYAML.
+`rich` is included above because `utils/logger.py` imports it at module top,
+and every entrypoint — including `api/server.py` — imports the logger; without
+`rich` the app fails to import before it even reaches the chromadb/tiktoken
+requirement.
+
+If `pip` errors with "Cannot uninstall PyYAML … RECORD file not found" (the
+Debian-managed system PyYAML), install PyYAML on its own with
+`--ignore-installed` — keep it in a separate command, since `--ignore-installed`
+applies to the **whole** install line and would otherwise force-reinstall the
+packages above:
+
+```bash
+pip install --ignore-installed PyYAML
+```
 
 ## 2. Launch (minimal mode)
 
+`RENDER=1` selects minimal mode. The listening port is set by `--port` on the
+uvicorn CLI (the `PORT` env var only applies when running `python api/server.py`
+directly, which reads it in `__main__`):
+
 ```bash
-RENDER=1 PORT=8080 python3 -m uvicorn api.server:app \
+RENDER=1 python3 -m uvicorn api.server:app \
   --host 0.0.0.0 --port 8080 --log-level info > /tmp/server.log 2>&1 &
 ```
 
-Wait for readiness by polling `/health` (do not `sleep` blindly):
+Wait for readiness by polling `/health` (do not `sleep` blindly), then fail
+fast if it never came up:
 
 ```bash
 for i in $(seq 1 8); do
   curl -sf http://127.0.0.1:8080/health && break; sleep 1
 done
+curl -sf http://127.0.0.1:8080/health >/dev/null \
+  || { echo "server did not start"; tail -20 /tmp/server.log; exit 1; }
 ```
 
 ## 3. Drive it
@@ -85,7 +104,11 @@ Set one provider before launching (any one):
 
 ```bash
 export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY / GOOGLE_API_KEY / XAI_API_KEY
-# or AWS Bedrock Claude: export AWS_REGION=us-east-1  (needs valid AWS creds)
+# AWS Bedrock Claude needs BOTH a region and valid AWS credentials — region
+# alone is not enough:
+#   export AWS_REGION=us-east-1
+#   export AWS_ACCESS_KEY_ID=...      # plus AWS_SECRET_ACCESS_KEY,
+#   export AWS_SECRET_ACCESS_KEY=...  # or an instance/role profile
 ```
 
 Then repeat step 2. Note: the environment's proxy AWS variables
