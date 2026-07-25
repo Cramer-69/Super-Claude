@@ -109,12 +109,15 @@ A fresh container has no LLM key, so these are expected — not failures:
 
 First install the SDK for the provider you'll use. The step-1 install only
 covers OpenAI (the `openai` package, which also serves xAI/Grok). The other
-providers import their SDK lazily, and `chat()` swallows a missing-SDK import
-error and returns the "no provider configured"-style apology instead of a real
-answer — so install the matching package first. `pip install -r
-requirements-cloud.txt` pulls in all the provider SDKs at once, but it does
-**not** include `chromadb`/`tiktoken`, so you still need the step-1 install to
-import the app:
+providers import their SDK lazily. If the SDK isn't installed, `chat()` catches
+the `ModuleNotFoundError` and returns a **provider-failed** message — e.g.
+`Sorry — the anthropic provider failed: ModuleNotFoundError: No module named 'anthropic'`
+— rather than a real answer. (This is a *different* message from the
+"Minimal mode: no AI provider configured…" one, which only appears when no
+provider key is set at all.) So install the matching package first.
+`pip install -r requirements-cloud.txt` pulls in all the provider SDKs at once,
+but it does **not** include `chromadb`/`tiktoken`, so you still need the step-1
+install to import the app:
 
 | Provider | Env var | Extra package |
 |---|---|---|
