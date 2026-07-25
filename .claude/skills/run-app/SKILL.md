@@ -45,6 +45,11 @@ packages above:
 pip install --ignore-installed PyYAML
 ```
 
+This repair only fixes PyYAML — it does **not** resume the install that
+aborted. After running it, **re-run whichever `pip install` command above
+failed**, so the packages it was installing (FastAPI, chromadb, …) actually
+get installed before you launch.
+
 ## 2. Launch (minimal mode)
 
 `RENDER=1` selects minimal mode. The listening port is set by `--port` on the
@@ -54,6 +59,7 @@ directly, which reads it in `__main__`):
 ```bash
 RENDER=1 python3 -m uvicorn api.server:app \
   --host 0.0.0.0 --port 8080 --log-level info > /tmp/server.log 2>&1 &
+echo $! > /tmp/server.pid   # remember the PID so you can stop it before relaunching
 ```
 
 Wait for readiness by polling `/health` (do not `sleep` blindly), then fail
@@ -101,7 +107,22 @@ A fresh container has no LLM key, so these are expected — not failures:
 
 ## To get a real chat response
 
-Set one provider before launching (any one):
+First install the SDK for the provider you'll use. The step-1 install only
+covers OpenAI (the `openai` package, which also serves xAI/Grok). The other
+providers import their SDK lazily, and `chat()` swallows a missing-SDK import
+error and returns the "no provider configured"-style apology instead of a real
+answer — so install the matching package first (or just
+`pip install -r requirements-cloud.txt`, which includes them all):
+
+| Provider | Env var | Extra package |
+|---|---|---|
+| OpenAI | `OPENAI_API_KEY` | already installed |
+| xAI / Grok | `XAI_API_KEY` | already installed (uses `openai`) |
+| Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
+| Google Gemini | `GOOGLE_API_KEY` | `google-generativeai` |
+| AWS Bedrock | `AWS_REGION` + AWS creds | `boto3` |
+
+Then set exactly one provider:
 
 ```bash
 export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY / GOOGLE_API_KEY / XAI_API_KEY
@@ -112,6 +133,15 @@ export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY / GOOGLE_API_KEY / XA
 #   export AWS_SECRET_ACCESS_KEY=...  # or an instance/role profile
 ```
 
-Then repeat step 2. Note: the environment's proxy AWS variables
-(`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` starting with `prox…`) are
-placeholders and are rejected by Bedrock — they are not usable credentials.
+Then **stop the smoke-test server and relaunch** — a running uvicorn process
+won't pick up the newly exported key, and starting a second one just fails with
+"address already in use" (while the readiness poll hits the stale server and
+falsely reports success):
+
+```bash
+kill "$(cat /tmp/server.pid)" 2>/dev/null   # stop the old server
+```
+
+Now repeat step 2 (it records a fresh PID). Note: the environment's proxy AWS
+variables (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` starting with `prox…`)
+are placeholders and are rejected by Bedrock — they are not usable credentials.
