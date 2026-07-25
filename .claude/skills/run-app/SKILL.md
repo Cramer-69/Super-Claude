@@ -80,7 +80,8 @@ Screenshot the UI (pre-installed Chromium; use a mobile-ish viewport — the UI
 is a PWA):
 
 ```bash
-CHROME=$(ls -d /opt/pw-browsers/chromium-*/chrome-linux/chrome | head -1)
+CHROME=$(ls -d /opt/pw-browsers/chromium-*/chrome-linux/chrome 2>/dev/null | head -1)
+[ -x "$CHROME" ] || { echo "Chromium not found under /opt/pw-browsers"; exit 1; }
 "$CHROME" --headless --no-sandbox --disable-gpu --screenshot=/tmp/ui.png \
   --window-size=430,900 --virtual-time-budget=6000 http://127.0.0.1:8080/
 ```
