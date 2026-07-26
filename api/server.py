@@ -18,7 +18,10 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from conductor.agent import ConductorAgent
+# NOTE: ConductorAgent is imported lazily inside get_conductor() (full mode
+# only). It pulls in ChromaDB, which is intentionally excluded from
+# requirements-cloud.txt; importing it here would break cloud/minimal
+# deploys (Render, Cloud Run, Bedrock) on startup with ModuleNotFoundError.
 from voice.voice_processor import get_voice_processor
 from utils.logger import logger
 from config.settings import settings
@@ -71,6 +74,9 @@ def get_conductor():
                 conductor = MinimalConductor()
                 logger.info("Using minimal conductor (cloud mode - no memory)")
             else:
+                # Imported here (not at module top) so cloud/minimal deploys
+                # don't require ChromaDB just to import the app.
+                from conductor.agent import ConductorAgent
                 conductor = ConductorAgent()
                 logger.info("Using full conductor (local mode - with memory)")
         except Exception as e:
