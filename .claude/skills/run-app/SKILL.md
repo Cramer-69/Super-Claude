@@ -19,21 +19,28 @@ For a smoke run, use **minimal mode** (`RENDER=1`).
 
 ## 1. Install dependencies
 
-`api/server.py` imports `ConductorAgent` at module top level, which pulls in
-`chromadb` and `tiktoken` **even in minimal mode** — so they're required just
-to import the app, though minimal mode never uses them at runtime.
+For a minimal-mode smoke run you only need the lightweight web + provider
+deps — the same set as `requirements-cloud.txt`:
 
 ```bash
+pip install -r requirements-cloud.txt
+# or, explicitly:
 pip install fastapi 'uvicorn[standard]' pydantic pydantic-settings \
   python-dotenv openai python-multipart rich
-# needed only so the module imports; not used in minimal mode:
-pip install chromadb tiktoken
 ```
 
-`rich` is included above because `utils/logger.py` imports it at module top,
-and every entrypoint — including `api/server.py` — imports the logger; without
-`rich` the app fails to import before it even reaches the chromadb/tiktoken
-requirement.
+`rich` is required because `utils/logger.py` imports it at module top, and
+every entrypoint — including `api/server.py` — imports the logger; without
+`rich` the app fails to import.
+
+**`chromadb` + `tiktoken` are only needed for full/local mode.** `api/server.py`
+imports `ConductorAgent` lazily (inside `get_conductor()`), so importing and
+starting the app in minimal mode does **not** pull in ChromaDB. Install these
+two only if you plan to run the full memory-backed conductor:
+
+```bash
+pip install chromadb tiktoken   # full/local mode only
+```
 
 If `pip` errors with "Cannot uninstall PyYAML … RECORD file not found" (the
 Debian-managed system PyYAML), install PyYAML on its own with
@@ -47,8 +54,8 @@ pip install --ignore-installed PyYAML
 
 This repair only fixes PyYAML — it does **not** resume the install that
 aborted. After running it, **re-run whichever `pip install` command above
-failed**, so the packages it was installing (FastAPI, chromadb, …) actually
-get installed before you launch.
+failed**, so the packages it was installing actually get installed before you
+launch.
 
 ## 2. Launch (minimal mode)
 
@@ -107,22 +114,21 @@ A fresh container has no LLM key, so these are expected — not failures:
 
 ## To get a real chat response
 
-First install the SDK for the provider you'll use. The step-1 install only
-covers OpenAI (the `openai` package, which also serves xAI/Grok). The other
-providers import their SDK lazily. If the SDK isn't installed, `chat()` catches
-the `ModuleNotFoundError` and returns a **provider-failed** message — e.g.
-`Sorry — the anthropic provider failed: ModuleNotFoundError: No module named 'anthropic'`
-— rather than a real answer. (This is a *different* message from the
+Make sure the SDK for your chosen provider is installed. `requirements-cloud.txt`
+already includes all of them, so if you installed that in step 1 you're covered.
+If you used the explicit minimal list instead, it only has `openai` (which also
+serves xAI/Grok) — install the extra package from the table below for any other
+provider. Each non-OpenAI provider imports its SDK lazily; if it's missing,
+`chat()` catches the `ModuleNotFoundError` and returns a **provider-failed**
+message — e.g. `Sorry — the anthropic provider failed: ModuleNotFoundError: No module named 'anthropic'`
+— rather than a real answer. (That's a *different* message from the
 "Minimal mode: no AI provider configured…" one, which only appears when no
-provider key is set at all.) So install the matching package first.
-`pip install -r requirements-cloud.txt` pulls in all the provider SDKs at once,
-but it does **not** include `chromadb`/`tiktoken`, so you still need the step-1
-install to import the app:
+provider key is set at all.)
 
-| Provider | Env var | Extra package |
+| Provider | Env var | SDK (in `requirements-cloud.txt`) |
 |---|---|---|
-| OpenAI | `OPENAI_API_KEY` | already installed |
-| xAI / Grok | `XAI_API_KEY` | already installed (uses `openai`) |
+| OpenAI | `OPENAI_API_KEY` | `openai` |
+| xAI / Grok | `XAI_API_KEY` | `openai` (same client) |
 | Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
 | Google Gemini | `GOOGLE_API_KEY` | `google-generativeai` |
 | AWS Bedrock | `AWS_REGION` + AWS creds | `boto3` |
