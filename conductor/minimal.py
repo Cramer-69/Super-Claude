@@ -11,6 +11,11 @@ from config.settings import settings
 from utils.logger import logger
 
 
+def _real(value):
+    """Return `value` if it's a real (non-placeholder, non-empty) key."""
+    return value if value and not value.startswith("your_") else None
+
+
 def _use_key(env_var: str, settings_value):
     """Return a real (non-placeholder) key for `env_var`, or None.
 
@@ -21,16 +26,19 @@ def _use_key(env_var: str, settings_value):
     _provider_for_keys previously disagreed with
     settings.configured_providers() (used by /health) — while still
     honoring live env var changes. Placeholder values like "your_openai_key"
-    are filtered out, matching configured_providers()'s behavior.
+    are filtered out at *each* source independently (matching
+    configured_providers()'s behavior), so a placeholder left in the live
+    environment doesn't shadow a real key from settings/.env.
 
     The downstream _call_<provider> methods read os.environ[...] directly,
-    so if the key came only from settings (.env), export it now.
+    so if the real key came from settings (not the live env, or the live env
+    held only a placeholder), export/overwrite it now.
     """
-    raw = os.getenv(env_var) or settings_value
-    if not raw or raw.startswith("your_"):
+    value = _real(os.getenv(env_var)) or _real(settings_value)
+    if not value:
         return None
-    os.environ.setdefault(env_var, raw)
-    return raw
+    os.environ[env_var] = value
+    return value
 
 
 def _provider_for_keys() -> tuple:
