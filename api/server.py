@@ -103,8 +103,11 @@ import tempfile
 TEMP_DIR = Path(tempfile.gettempdir()) / "conductor_audio"
 try:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
-except OSError:
-    pass
+except OSError as exc:
+    logger.warning(
+        f"Could not create audio temp dir {TEMP_DIR}: {exc}; "
+        "voice endpoints may be unavailable"
+    )
 
 
 # Request/Response Models

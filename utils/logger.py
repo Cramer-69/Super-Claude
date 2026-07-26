@@ -48,9 +48,14 @@ def setup_logger(name: str = "conductor_agent") -> logging.Logger:
         )
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
-    except OSError:
-        # Read-only filesystem (or otherwise unwritable log path).
-        pass
+    except OSError as exc:
+        # Read-only filesystem (or otherwise unwritable log path): fall back
+        # to console-only logging, but make the fallback discoverable.
+        print(
+            f"[logger] file logging disabled (log_file={settings.log_file!r}: "
+            f"{exc}); using console only",
+            file=sys.stderr,
+        )
 
     # Rich console handler
     console_handler = RichHandler(
