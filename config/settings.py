@@ -4,6 +4,7 @@ Loads settings from environment variables and .env file.
 """
 
 import os
+import sys
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 from typing import Optional
@@ -157,7 +158,18 @@ def init_directories():
     ]
     
     for dir_path in dirs_to_create:
-        dir_path.mkdir(parents=True, exist_ok=True)
+        try:
+            dir_path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Read-only filesystem (e.g. Vercel/serverless, where only /tmp
+            # is writable). config.settings is imported very early — by
+            # nearly every module, including the logger — so raising here
+            # would crash the whole app before it can even fall back.
+            print(
+                f"[settings] could not create directory {dir_path}: {exc}; "
+                "continuing without it",
+                file=sys.stderr,
+            )
 
 
 # Initialize on import

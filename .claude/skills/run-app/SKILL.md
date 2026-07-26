@@ -13,7 +13,8 @@ The app is a FastAPI server (`api/server.py`) that serves a web chat UI at
   container with no data.
 - **minimal / cloud mode** — `MinimalConductor`, no ChromaDB, calls whatever
   LLM provider key is set. Selected automatically when any of
-  `RENDER` / `RAILWAY` / `HEROKU` / `K_SERVICE` is in the environment.
+  `RENDER` / `RAILWAY` / `HEROKU` / `K_SERVICE` / `VERCEL` is in the
+  environment.
 
 For a smoke run, use **minimal mode** (`RENDER=1`).
 

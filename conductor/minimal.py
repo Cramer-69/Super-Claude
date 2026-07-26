@@ -11,21 +11,44 @@ from config.settings import settings
 from utils.logger import logger
 
 
+def _use_key(env_var: str, settings_value):
+    """Return a real (non-placeholder) key for `env_var`, or None.
+
+    Checks the live process environment first, falling back to
+    `settings_value` (populated by pydantic-settings from the .env file as
+    well as the environment, but snapshotted once at import time). This
+    covers a key that's only ever set in .env — the gap where
+    _provider_for_keys previously disagreed with
+    settings.configured_providers() (used by /health) — while still
+    honoring live env var changes. Placeholder values like "your_openai_key"
+    are filtered out, matching configured_providers()'s behavior.
+
+    The downstream _call_<provider> methods read os.environ[...] directly,
+    so if the key came only from settings (.env), export it now.
+    """
+    raw = os.getenv(env_var) or settings_value
+    if not raw or raw.startswith("your_"):
+        return None
+    os.environ.setdefault(env_var, raw)
+    return raw
+
+
 def _provider_for_keys() -> tuple:
-    """Pick (provider, model) based on which env var is set.
+    """Pick (provider, model) based on which key is configured.
 
     Direct/"home field" provider APIs take precedence — Claude via the
     Anthropic API, Grok via xAI — so having AWS credentials in the
     environment does not silently route through Bedrock. Bedrock is used
     only as a last resort, when no direct provider key is configured.
     """
-    if os.getenv("ANTHROPIC_API_KEY"):
+    if _use_key("ANTHROPIC_API_KEY", settings.anthropic_api_key):
         return "anthropic", "claude-3-5-haiku-latest"
-    if os.getenv("XAI_API_KEY"):
+    if _use_key("XAI_API_KEY", settings.xai_api_key):
         return "xai", "grok-2-latest"
-    if os.getenv("OPENAI_API_KEY", "").startswith("sk-"):
+    openai_key = _use_key("OPENAI_API_KEY", settings.openai_api_key)
+    if openai_key and openai_key.startswith("sk-"):
         return "openai", "gpt-4o-mini"
-    if os.getenv("GOOGLE_API_KEY"):
+    if _use_key("GOOGLE_API_KEY", settings.google_api_key):
         return "google", "gemini-1.5-flash"
     if settings.bedrock_configured():
         return "bedrock", settings.bedrock_model()
