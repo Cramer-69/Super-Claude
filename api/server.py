@@ -18,7 +18,10 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from conductor.agent import ConductorAgent
+# NOTE: ConductorAgent is imported lazily inside get_conductor() (full mode
+# only). It pulls in ChromaDB, which is intentionally excluded from
+# requirements-cloud.txt; importing it here would break cloud/minimal
+# deploys (Render, Cloud Run, Bedrock) on startup with ModuleNotFoundError.
 from voice.voice_processor import get_voice_processor
 from utils.logger import logger
 from config.settings import settings
@@ -44,12 +47,12 @@ conductor = None
 voice_processor = None
 
 
+_CLOUD_ENV_VARS = ("K_SERVICE", "RENDER", "RAILWAY", "HEROKU", "VERCEL")
+
+
 def _is_cloud() -> bool:
-    """True on Cloud Run / Render / Railway / Heroku — skip ChromaDB."""
-    return any(
-        os.getenv(v)
-        for v in ("K_SERVICE", "RENDER", "RAILWAY", "HEROKU")
-    )
+    """True on Cloud Run / Render / Railway / Heroku / Vercel — skip ChromaDB."""
+    return any(os.getenv(v) for v in _CLOUD_ENV_VARS)
 
 
 
@@ -58,12 +61,7 @@ def get_conductor():
     global conductor
     if conductor is None:
         # Use minimal conductor in cloud environments (no ChromaDB)
-        is_cloud = (
-            os.getenv("K_SERVICE")  # Cloud Run
-            or os.getenv("RENDER")
-            or os.getenv("RAILWAY")
-            or os.getenv("HEROKU")
-        )
+        is_cloud = _is_cloud()
 
         try:
             if is_cloud:
@@ -71,6 +69,9 @@ def get_conductor():
                 conductor = MinimalConductor()
                 logger.info("Using minimal conductor (cloud mode - no memory)")
             else:
+                # Imported here (not at module top) so cloud/minimal deploys
+                # don't require ChromaDB just to import the app.
+                from conductor.agent import ConductorAgent
                 conductor = ConductorAgent()
                 logger.info("Using full conductor (local mode - with memory)")
         except Exception as e:
@@ -94,9 +95,19 @@ def get_voice_processor_instance():
     return voice_processor
 
 
-# Create temp directory for audio files
-TEMP_DIR = Path("temp_audio")
-TEMP_DIR.mkdir(exist_ok=True)
+# Create temp directory for audio files. Use the system temp dir (writable
+# everywhere, including serverless/read-only filesystems like Vercel where
+# only /tmp is writable) instead of a relative path in a read-only CWD.
+import tempfile
+
+TEMP_DIR = Path(tempfile.gettempdir()) / "conductor_audio"
+try:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as exc:
+    logger.warning(
+        f"Could not create audio temp dir {TEMP_DIR}: {exc}; "
+        "voice endpoints may be unavailable"
+    )
 
 
 # Request/Response Models
