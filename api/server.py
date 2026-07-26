@@ -100,9 +100,16 @@ def get_voice_processor_instance():
     return voice_processor
 
 
-# Create temp directory for audio files
-TEMP_DIR = Path("temp_audio")
-TEMP_DIR.mkdir(exist_ok=True)
+# Create temp directory for audio files. Use the system temp dir (writable
+# everywhere, including serverless/read-only filesystems like Vercel where
+# only /tmp is writable) instead of a relative path in a read-only CWD.
+import tempfile
+
+TEMP_DIR = Path(tempfile.gettempdir()) / "conductor_audio"
+try:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 
 # Request/Response Models
