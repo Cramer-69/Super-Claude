@@ -127,21 +127,27 @@ provider key is set at all.)
 
 | Provider | Env var | SDK (in `requirements-cloud.txt`) |
 |---|---|---|
-| OpenAI | `OPENAI_API_KEY` | `openai` |
+| Anthropic (Claude) | `ANTHROPIC_API_KEY` | `anthropic` |
 | xAI / Grok | `XAI_API_KEY` | `openai` (same client) |
-| Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
+| OpenAI | `OPENAI_API_KEY` | `openai` |
 | Google Gemini | `GOOGLE_API_KEY` | `google-generativeai` |
 | AWS Bedrock | `AWS_REGION` + AWS creds | `boto3` |
 
-Then set exactly one provider:
+**Provider precedence:** direct/"home field" APIs win, in the order above —
+Claude via the Anthropic API, Grok via xAI, then OpenAI, then Google. **Bedrock
+is a last resort**, used only when no direct provider key is set, so having AWS
+credentials in the environment does not silently route Claude through Bedrock.
+
+Then set the provider you want (Claude shown):
 
 ```bash
-export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY / GOOGLE_API_KEY / XAI_API_KEY
-# AWS Bedrock Claude needs BOTH a region and valid AWS credentials — region
-# alone is not enough:
+export ANTHROPIC_API_KEY=sk-ant-...   # Claude, direct Anthropic API (recommended)
+# or: export XAI_API_KEY=xai-...      # Grok, direct xAI API
+# or: export OPENAI_API_KEY=sk-...    # or GOOGLE_API_KEY=...
+# Bedrock (last resort — only if no direct key is set) needs a region AND
+# valid AWS credentials:
 #   export AWS_REGION=us-east-1
-#   export AWS_ACCESS_KEY_ID=...      # plus AWS_SECRET_ACCESS_KEY,
-#   export AWS_SECRET_ACCESS_KEY=...  # or an instance/role profile
+#   export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...   # or an IAM role
 ```
 
 Then **stop the smoke-test server and relaunch** — a running uvicorn process

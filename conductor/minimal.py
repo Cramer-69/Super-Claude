@@ -12,17 +12,23 @@ from utils.logger import logger
 
 
 def _provider_for_keys() -> tuple:
-    """Pick (provider, model) based on which env var is set."""
-    if settings.bedrock_configured():
-        return "bedrock", settings.bedrock_model()
-    if os.getenv("GOOGLE_API_KEY"):
-        return "google", "gemini-1.5-flash"
-    if os.getenv("OPENAI_API_KEY", "").startswith("sk-"):
-        return "openai", "gpt-4o-mini"
+    """Pick (provider, model) based on which env var is set.
+
+    Direct/"home field" provider APIs take precedence — Claude via the
+    Anthropic API, Grok via xAI — so having AWS credentials in the
+    environment does not silently route through Bedrock. Bedrock is used
+    only as a last resort, when no direct provider key is configured.
+    """
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic", "claude-3-5-haiku-latest"
     if os.getenv("XAI_API_KEY"):
         return "xai", "grok-2-latest"
+    if os.getenv("OPENAI_API_KEY", "").startswith("sk-"):
+        return "openai", "gpt-4o-mini"
+    if os.getenv("GOOGLE_API_KEY"):
+        return "google", "gemini-1.5-flash"
+    if settings.bedrock_configured():
+        return "bedrock", settings.bedrock_model()
     return "none", "minimal"
 
 
