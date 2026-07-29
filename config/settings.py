@@ -28,7 +28,13 @@ class Settings(BaseSettings):
     xai_api_key: Optional[str] = None
     aws_region: Optional[str] = None
     aws_bedrock_model_id: Optional[str] = None
-    
+
+    # Durable cross-session memory (mem0). Off by default: requires the
+    # optional `mem0ai` package and, in its default config, an OpenAI key
+    # for mem0's own LLM/embedder calls.
+    mem0_enabled: bool = False
+    mem0_default_user_id: str = "default"
+
     # Model Configuration
     conductor_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
