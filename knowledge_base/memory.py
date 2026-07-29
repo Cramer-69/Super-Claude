@@ -15,9 +15,21 @@ from utils.logger import logger
 try:
     from mem0 import Memory
     MEM0_AVAILABLE = True
-except ImportError:
+except Exception:
+    # Broad on purpose: an installed-but-broken mem0 (missing native deps,
+    # incompatible runtime, etc.) must disable memory, not crash app startup.
     Memory = None
     MEM0_AVAILABLE = False
+
+MAX_MEMORY_TEXT_LENGTH = 500
+
+
+def sanitize_memory_text(text: str) -> str:
+    """Collapse whitespace/newlines and cap length before a stored memory is
+    interpolated into a prompt, so it can't break out of the surrounding
+    structure (bullet list, context block header, etc.)."""
+    collapsed = " ".join(text.split())
+    return collapsed[:MAX_MEMORY_TEXT_LENGTH]
 
 
 class MemoryStore:
