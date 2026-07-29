@@ -1,0 +1,73 @@
+name: Build and push to Amazon ECR
+
+# Builds the existing Dockerfile and pushes it to Amazon ECR on every push to
+# main. This is the first real piece of the AWS deployment path: once an
+# image is in ECR, App Runner (or ECS) can deploy directly from it.
+#
+# One-time setup required in the AWS console (us-west-2):
+#   1. Create an ECR repository named "super-claude".
+#   2. Create an IAM user with permission to push to that repository
+#      (the AWS-managed policy "AmazonEC2ContainerRegistryPowerUser" covers this).
+#   3. Generate an access key for that IAM user.
+#
+# Then add these as GitHub repo secrets (Settings -> Secrets and variables ->
+# Actions -> New repository secret) -- paste each value directly into GitHub's
+# own secret field, never into a chat or a file in this repo:
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#
+# Nothing else needs to change here. The workflow below reads only those two
+# secrets and the fixed values (region, repository name) declared as env vars.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Pushes the mutable "latest" tag, so concurrent runs from rapid successive
+# pushes to main could race and let a slower, older run overwrite "latest"
+# with a stale image. Cancel any in-progress run for this workflow when a
+# newer one starts, so only the most recent push ever wins.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: super-claude
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Docker Buildx
+        # Required for cache-to: type=gha -- the default "docker" build
+        # driver cannot export to the GitHub Actions cache backend.
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+
+      - name: Build and push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
