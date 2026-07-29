@@ -44,6 +44,26 @@ class MemoryStoreTests(unittest.TestCase):
         mock_client.search.assert_called_once_with("coffee", user_id="u1", limit=5)
         self.assertEqual(results, [{"memory": "likes coffee"}])
 
+    def test_search_normalizes_non_dict_items(self):
+        mock_client = MagicMock()
+        mock_client.search.return_value = ["likes coffee", "works remotely"]
+
+        with patch("knowledge_base.memory.MEM0_AVAILABLE", True), \
+             patch("knowledge_base.memory.Memory", return_value=mock_client), \
+             patch("knowledge_base.memory.settings") as mock_settings:
+            mock_settings.mem0_enabled = True
+            store = MemoryStore()
+
+        results = store.search("coffee", user_id="u1")
+
+        self.assertEqual(
+            results,
+            [{"memory": "likes coffee"}, {"memory": "works remotely"}],
+        )
+        for item in results:
+            # Downstream callers rely on dict.get() never raising.
+            self.assertIsNone(item.get("nonexistent_key"))
+
     def test_search_failure_is_swallowed(self):
         mock_client = MagicMock()
         mock_client.search.side_effect = RuntimeError("boom")

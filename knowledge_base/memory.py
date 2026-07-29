@@ -53,7 +53,8 @@ class MemoryStore:
             return []
         try:
             result = self.client.search(query, user_id=user_id, limit=limit)
-            return result.get("results", []) if isinstance(result, dict) else list(result)
+            items = result.get("results", []) if isinstance(result, dict) else list(result)
+            return [item if isinstance(item, dict) else {"memory": str(item)} for item in items]
         except Exception as e:
             logger.warning(f"mem0 search() failed: {e}")
             return []
