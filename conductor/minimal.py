@@ -124,6 +124,7 @@ class MinimalConductor:
                 f"{memory_context}\n\n"
                 f"Current message: {query}"
             )
+        succeeded = True
         try:
             if self.provider == "bedrock":
                 text = self._call_bedrock(augmented)
@@ -136,17 +137,21 @@ class MinimalConductor:
             elif self.provider == "xai":
                 text = self._call_xai(augmented)
             else:
+                succeeded = False
                 text = (
                     "Minimal mode: no AI provider configured. "
                     "Set AWS_REGION (for Bedrock Claude), OPENAI_API_KEY, "
                     "GOOGLE_API_KEY, ANTHROPIC_API_KEY or XAI_API_KEY."
                 )
         except Exception as e:
+            succeeded = False
             logger.error(f"MinimalConductor provider call failed ({self.provider}): {e}")
             text = f"Sorry — the {self.provider} provider failed: {type(e).__name__}: {e}"
 
-        # Write the exchange back so the next turn (voice or text) remembers it.
-        self.memory.add(query, text, user_id=user_id)
+        # Only persist real replies; never write error/fallback strings into
+        # shared memory, or they pollute future prompts.
+        if succeeded:
+            self.memory.add(query, text, user_id=user_id)
 
         return {
             "response": text,

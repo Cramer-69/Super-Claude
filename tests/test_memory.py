@@ -18,6 +18,14 @@ class Mem0MemoryTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(Mem0Memory().user_id, "ara-partner")
 
+    def test_user_id_env_override_is_honored(self):
+        with patch.dict(os.environ, {"ARA_MEMORY_USER_ID": "campaign-42"}, clear=True):
+            self.assertEqual(Mem0Memory().user_id, "campaign-42")
+
+    def test_explicit_user_id_beats_env(self):
+        with patch.dict(os.environ, {"ARA_MEMORY_USER_ID": "campaign-42"}, clear=True):
+            self.assertEqual(Mem0Memory(user_id="vip").user_id, "vip")
+
     def test_rows_handles_list_dict_and_none(self):
         self.assertEqual(Mem0Memory._rows([{"memory": "x"}]), [{"memory": "x"}])
         self.assertEqual(Mem0Memory._rows({"results": [{"memory": "y"}]}), [{"memory": "y"}])

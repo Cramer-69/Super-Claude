@@ -18,29 +18,32 @@ import os
 from utils.logger import logger
 
 # Same default user_id as the memory hub so both surfaces share memory.
-DEFAULT_USER_ID = os.getenv("ARA_MEMORY_USER_ID", "ara-partner")
-SEARCH_LIMIT = int(os.getenv("MEM0_SEARCH_LIMIT", "5"))
+DEFAULT_USER_ID = "ara-partner"
 
 
 class Mem0Memory:
     """Thin, fail-open wrapper around the hosted Mem0 client."""
 
-    def __init__(self, user_id: str = DEFAULT_USER_ID) -> None:
-        self.user_id = user_id
+    def __init__(self, user_id: str | None = None) -> None:
+        # Resolve config at construction, not import, so env overrides (and
+        # tests that patch the environment) are honored.
+        self.user_id = user_id or os.getenv("ARA_MEMORY_USER_ID", DEFAULT_USER_ID)
+        self.search_limit = int(os.getenv("MEM0_SEARCH_LIMIT", "5"))
         self._client = self._build_client()
 
     @staticmethod
     def _build_client():
-        if not os.getenv("MEM0_API_KEY"):
-            logger.info("Mem0 disabled (no MEM0_API_KEY); memory is a no-op.")
+        api_key = os.getenv("MEM0_API_KEY")
+        if not api_key:
+            logger.debug("Mem0 disabled (no MEM0_API_KEY); memory is a no-op.")
             return None
         try:
             from mem0 import MemoryClient
         except ImportError:
-            logger.info("Mem0 disabled (mem0ai not installed); memory is a no-op.")
+            logger.debug("Mem0 disabled (mem0ai not installed); memory is a no-op.")
             return None
         try:
-            client = MemoryClient()  # reads MEM0_API_KEY from the environment
+            client = MemoryClient(api_key=api_key)
             logger.info("Mem0 memory enabled.")
             return client
         except Exception as exc:  # noqa: BLE001 - never let memory break a reply
@@ -65,7 +68,7 @@ class Mem0Memory:
         try:
             rows = self._rows(
                 self._client.search(
-                    query, user_id=user_id or self.user_id, limit=SEARCH_LIMIT
+                    query, user_id=user_id or self.user_id, limit=self.search_limit
                 )
             )
         except Exception as exc:  # noqa: BLE001
