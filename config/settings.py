@@ -69,6 +69,27 @@ class Settings(BaseSettings):
     # deliberately crawl an internal site.
     firecrawl_allow_private_hosts: bool = False
 
+    # Realtime voice rooms via LiveKit. Off until all three are set.
+    livekit_url: Optional[str] = None
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None
+    livekit_token_ttl_seconds: int = 3600
+
+    # Dify app backend (https://dify.ai). Off until an app key is set.
+    dify_api_key: Optional[str] = None
+    dify_api_url: str = "https://api.dify.ai/v1"
+
+    # OpenHands agent runtime. Off until its base URL is set.
+    openhands_api_url: Optional[str] = None
+    openhands_api_key: Optional[str] = None
+
+    # Shared HTTP timeout for the plugin clients above, in seconds.
+    plugin_http_timeout: float = 30.0
+
+    # Optional bearer token guarding the OpenAI-compatible endpoints.
+    # Unset means unauthenticated, matching /api/chat.
+    conductor_api_key: Optional[str] = None
+
     # Model Configuration
     conductor_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
@@ -172,6 +193,34 @@ class Settings(BaseSettings):
         either setting is enough.
         """
         return bool(self.firecrawl_key() or self.firecrawl_api_url)
+
+    def livekit_credentials(self) -> Optional[tuple[str, str, str]]:
+        """Return (url, api_key, api_secret), or None if any is missing."""
+        url = _real_key(self.livekit_url)
+        key = _real_key(self.livekit_api_key)
+        secret = _real_key(self.livekit_api_secret)
+        if url and key and secret:
+            return url, key, secret
+        return None
+
+    def livekit_configured(self) -> bool:
+        return self.livekit_credentials() is not None
+
+    def dify_key(self) -> Optional[str]:
+        return _real_key(self.dify_api_key)
+
+    def dify_configured(self) -> bool:
+        return bool(self.dify_key())
+
+    def openhands_base_url(self) -> Optional[str]:
+        return _real_key(self.openhands_api_url)
+
+    def openhands_configured(self) -> bool:
+        return bool(self.openhands_base_url())
+
+    def conductor_key(self) -> Optional[str]:
+        """Bearer token required by the OpenAI-compatible API, if any."""
+        return _real_key(self.conductor_api_key)
 
     def configured_providers(self) -> list[str]:
         """Return names of providers with a non-placeholder key set."""

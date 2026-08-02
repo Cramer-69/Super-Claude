@@ -25,3 +25,4 @@ google-generativeai>=0.3.0
 # so they are safe to ship in the lean cloud image.
 mem0ai>=0.1.0
 firecrawl-py>=4.0.0
+livekit-api>=1.0.0

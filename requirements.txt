@@ -24,3 +24,4 @@ sentence-transformers==2.7.0
 # Optional plugins (inert unless configured; see README -> Plugins)
 mem0ai>=0.1.0
 firecrawl-py>=4.0.0
+livekit-api>=1.0.0

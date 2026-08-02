@@ -12,9 +12,12 @@ from pathlib import Path
 _pkg_dir = str(Path(__file__).resolve().parent.parent)
 if _pkg_dir not in sys.path:
     sys.path.insert(0, _pkg_dir)
-from typing import Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+import json
+import secrets
+import time
+from typing import Any, Dict, List, Optional
+from fastapi import FastAPI, UploadFile, File, HTTPException, Header
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -24,6 +27,9 @@ from pydantic import BaseModel, Field
 # deploys (Render, Cloud Run, Bedrock) on startup with ModuleNotFoundError.
 from voice.voice_processor import get_voice_processor
 from integrations.firecrawl_client import get_firecrawl_client
+from integrations.livekit_client import get_livekit_client
+from integrations.dify_client import get_dify_client
+from integrations.openhands_client import get_openhands_client
 from knowledge_base.memory import get_memory_store
 from utils.logger import logger
 from config.settings import settings
@@ -143,6 +149,42 @@ class WebSearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=MAX_WEB_SEARCH_LIMIT)
 
 
+class LiveKitTokenRequest(BaseModel):
+    identity: str
+    room: str
+
+
+class DifyChatRequest(BaseModel):
+    query: str
+    user: str
+    conversation_id: Optional[str] = None
+    inputs: Optional[dict] = None
+
+
+class OpenHandsTaskRequest(BaseModel):
+    task: str
+    repository: Optional[str] = None
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    """The subset of OpenAI's chat-completions request this server honors.
+
+    Sampling knobs (temperature, top_p, ...) are accepted and ignored — the
+    conductor picks its own — so clients that always send them still work.
+    """
+    model: Optional[str] = None
+    messages: List[ChatMessage]
+    stream: bool = False
+    user: Optional[str] = None
+
+    model_config = {"extra": "ignore"}
+
+
 # In-memory voice settings (could be persisted later)
 current_voice_settings = VoiceSettings()
 
@@ -204,6 +246,23 @@ async def health_check():
                 "enabled": get_firecrawl_client().enabled,
                 "auto_fetch_urls": settings.firecrawl_auto_fetch_urls,
             },
+            "livekit": {
+                "configured": settings.livekit_configured(),
+                "enabled": get_livekit_client().enabled,
+            },
+            "dify": {
+                "configured": settings.dify_configured(),
+                "enabled": get_dify_client().enabled,
+            },
+            "openhands": {
+                "configured": settings.openhands_configured(),
+                "enabled": get_openhands_client().enabled,
+            },
+        },
+        "openai_compatible_api": {
+            "models_endpoint": "/v1/models",
+            "completions_endpoint": "/v1/chat/completions",
+            "auth_required": bool(settings.conductor_key()),
         },
     }
 
@@ -282,6 +341,110 @@ async def web_search(request: WebSearchRequest):
     """
     results = _require_firecrawl().search(request.query, limit=request.limit)
     return {"query": request.query, "results": results}
+
+
+def _plugin_unavailable(name: str, hint: str) -> HTTPException:
+    """503 with the settings that would turn `name` on."""
+    return HTTPException(
+        status_code=503,
+        detail=f"{name} is not configured. {hint} See README -> Plugins.",
+    )
+
+
+@app.post("/api/livekit/token")
+async def livekit_token(request: LiveKitTokenRequest):
+    """
+    Mint a LiveKit join token for the browser client.
+
+    Args:
+        request: The participant identity and the room to join
+
+    Returns:
+        The token, the LiveKit server URL, and the token's lifetime
+    """
+    client = get_livekit_client()
+    if not client.enabled:
+        raise _plugin_unavailable(
+            "LiveKit",
+            "Install livekit-api and set LIVEKIT_URL, LIVEKIT_API_KEY and "
+            "LIVEKIT_API_SECRET.",
+        )
+    grant = client.access_token(request.identity, request.room)
+    if grant is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Could not mint a token. identity and room must be 1-128 "
+                "characters of A-Z a-z 0-9 . _ : -"
+            ),
+        )
+    return grant
+
+
+@app.post("/api/dify/chat")
+async def dify_chat(request: DifyChatRequest):
+    """
+    Send a message to the configured Dify app.
+
+    Args:
+        request: The query, the end-user id, and an optional conversation
+            id to continue an existing Dify conversation
+
+    Returns:
+        The app's answer plus its conversation and message ids
+    """
+    client = get_dify_client()
+    if not client.enabled:
+        raise _plugin_unavailable("Dify", "Set DIFY_API_KEY (and DIFY_API_URL if self-hosted).")
+    result = client.chat(
+        request.query,
+        user=request.user,
+        conversation_id=request.conversation_id,
+        inputs=request.inputs,
+    )
+    if result is None:
+        raise HTTPException(status_code=502, detail="Dify request failed")
+    return result
+
+
+@app.post("/api/openhands/conversations")
+async def openhands_start(request: OpenHandsTaskRequest):
+    """
+    Hand a task to OpenHands, starting a new conversation.
+
+    Args:
+        request: The task text and an optional repository to work in
+
+    Returns:
+        The OpenHands server's response, passed through as-is
+    """
+    client = get_openhands_client()
+    if not client.enabled:
+        raise _plugin_unavailable("OpenHands", "Set OPENHANDS_API_URL.")
+    result = client.start_conversation(request.task, repository=request.repository)
+    if result is None:
+        raise HTTPException(status_code=502, detail="OpenHands request failed")
+    return result
+
+
+@app.get("/api/openhands/conversations/{conversation_id}")
+async def openhands_status(conversation_id: str):
+    """
+    Read one OpenHands conversation's state.
+
+    Args:
+        conversation_id: The conversation to read
+
+    Returns:
+        The OpenHands server's response, passed through as-is
+    """
+    client = get_openhands_client()
+    if not client.enabled:
+        raise _plugin_unavailable("OpenHands", "Set OPENHANDS_API_URL.")
+    result = client.get_conversation(conversation_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail="OpenHands request failed")
+    return result
 
 
 @app.post("/api/voice-chat")
@@ -441,6 +604,168 @@ async def set_voice(settings: VoiceSettings):
 async def get_voice_settings():
     """Get current voice settings."""
     return {"voice": current_voice_settings.voice}
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible API
+#
+# Lets any OpenAI-compatible client — TypingMind, LibreChat, the openai SDK,
+# an IDE plugin — talk to the conductor by pointing its "custom model" base
+# URL at this server. Only the fields the conductor can honor are read;
+# everything else in the request is accepted and ignored so strict clients
+# don't break.
+# ---------------------------------------------------------------------------
+
+CONDUCTOR_MODEL_ID = "conductor"
+
+# Cap on the transcript rebuilt from a client's message history, in
+# characters. Clients resend the whole conversation each turn, so without a
+# bound a long chat would grow the prompt (and the bill) without limit.
+MAX_TRANSCRIPT_CHARS = 12_000
+
+
+def _require_conductor_key(authorization: Optional[str]) -> None:
+    """Enforce CONDUCTOR_API_KEY on the OpenAI-compatible endpoints.
+
+    Unset means open, matching /api/chat. Set it whenever this server is
+    reachable from the internet: these endpoints spend your LLM credits.
+    """
+    expected = settings.conductor_key()
+    if not expected:
+        return
+    presented = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        presented = authorization[7:].strip()
+    if not secrets.compare_digest(presented, expected):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def _flatten_messages(messages: List[ChatMessage]) -> str:
+    """Turn a client's message list into a single query for the conductor.
+
+    The conductor's chat() takes one string, so earlier turns are replayed
+    as a labelled transcript above the latest user message. The transcript
+    is trimmed from the front — recent turns matter most — and the final
+    user message is always kept whole.
+    """
+    if not messages:
+        return ""
+
+    last = messages[-1]
+    query = last.content.strip()
+    earlier = messages[:-1]
+    if not earlier:
+        return query
+
+    lines = [f"{m.role}: {m.content.strip()}" for m in earlier if m.content.strip()]
+    transcript = "\n".join(lines)
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        transcript = "...\n" + transcript[-MAX_TRANSCRIPT_CHARS:]
+    if not transcript:
+        return query
+    return f"Conversation so far:\n{transcript}\n\nLatest message:\n{query}"
+
+
+def _completion_payload(text: str, model: str, completion_id: str) -> Dict[str, Any]:
+    """Build a non-streaming chat-completion response body."""
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ],
+        # Token accounting isn't tracked across the providers the conductor
+        # fronts; zeros keep the shape valid for clients that read it.
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
+
+def _stream_completion(text: str, model: str, completion_id: str):
+    """Yield the answer as OpenAI-style SSE chunks."""
+    created = int(time.time())
+
+    def chunk(delta: Dict[str, Any], finish_reason: Optional[str] = None) -> str:
+        payload = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        return f"data: {json.dumps(payload)}\n\n"
+
+    yield chunk({"role": "assistant", "content": ""})
+    for i in range(0, len(text), 120):
+        yield chunk({"content": text[i : i + 120]})
+    yield chunk({}, finish_reason="stop")
+    yield "data: [DONE]\n\n"
+
+
+@app.get("/v1/models")
+async def list_models(authorization: Optional[str] = Header(default=None)):
+    """List the models this server exposes (one: the conductor itself)."""
+    _require_conductor_key(authorization)
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": CONDUCTOR_MODEL_ID,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "conductor",
+            }
+        ],
+    }
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(
+    request: ChatCompletionRequest,
+    authorization: Optional[str] = Header(default=None),
+):
+    """
+    OpenAI-compatible chat completions, answered by the conductor.
+
+    Args:
+        request: An OpenAI chat-completions request; `messages` and
+            `stream` are honored, sampling parameters are ignored
+        authorization: Bearer token, required when CONDUCTOR_API_KEY is set
+
+    Returns:
+        A chat.completion body, or an SSE stream of chat.completion.chunk
+        events when `stream` is true
+    """
+    _require_conductor_key(authorization)
+
+    query = _flatten_messages(request.messages)
+    if not query:
+        raise HTTPException(status_code=400, detail="messages must contain content")
+
+    try:
+        # request.user scopes durable memory per client-supplied end user;
+        # None falls back to the shared default (see MEM0_DEFAULT_USER_ID).
+        result = get_conductor().chat(query=query, user_id=request.user)
+    except Exception as e:
+        logger.error(f"Error in chat completions endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    text = result["response"]
+    model = request.model or CONDUCTOR_MODEL_ID
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+
+    if request.stream:
+        return StreamingResponse(
+            _stream_completion(text, model, completion_id),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    return _completion_payload(text, model, completion_id)
 
 
 # Mount static files (will create later)

@@ -274,6 +274,96 @@ curl -X POST localhost:8080/api/web/search \
 `FirecrawlClient.crawl(url, limit=...)` is available in Python for multi-page
 crawls; it blocks until the crawl job finishes, so keep the limit small.
 
+### LiveKit — realtime voice rooms
+
+Mints join tokens for the browser client; the media path runs
+browser ↔ LiveKit directly, so the server never proxies audio:
+
+```env
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+LIVEKIT_TOKEN_TTL_SECONDS=3600   # optional
+```
+
+```bash
+curl -X POST localhost:8080/api/livekit/token \
+  -H 'Content-Type: application/json' \
+  -d '{"identity": "user-1", "room": "ara"}'
+# -> {"token": "...", "url": "wss://...", "room": "ara", "expires_in": 3600}
+```
+
+The grant is deliberately narrow — join that one room, publish and subscribe,
+nothing else. No room-admin or room-create rights, so a leaked browser token
+can't reshape the deployment. Identities and room names are restricted to
+`A-Z a-z 0-9 . _ : -` (1–128 chars); anything else is refused with a 400.
+
+### Dify — app backend
+
+```env
+DIFY_API_KEY=app-...
+DIFY_API_URL=https://api.dify.ai/v1   # or your self-hosted instance
+```
+
+```bash
+curl -X POST localhost:8080/api/dify/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "hello", "user": "user-1"}'
+# -> {"answer": "...", "conversation_id": "...", "message_id": "..."}
+```
+
+Pass `conversation_id` back on the next call to continue the same Dify thread.
+
+### OpenHands — agent runtime
+
+```env
+OPENHANDS_API_URL=http://localhost:3000
+OPENHANDS_API_KEY=...   # optional, if your instance requires one
+```
+
+```bash
+curl -X POST localhost:8080/api/openhands/conversations \
+  -H 'Content-Type: application/json' \
+  -d '{"task": "fix the failing test", "repository": "owner/repo"}'
+
+curl localhost:8080/api/openhands/conversations/<conversation_id>
+```
+
+OpenHands' REST API is still moving, so responses are passed through as-is
+rather than reshaped into a fixed schema.
+
+## 🔗 OpenAI-compatible API (TypingMind, LibreChat, the `openai` SDK)
+
+The server speaks enough of the OpenAI chat-completions API for any
+OpenAI-compatible client to use the conductor as a custom model:
+
+| Endpoint | Notes |
+|---|---|
+| `GET /v1/models` | Lists one model, `conductor` |
+| `POST /v1/chat/completions` | `messages` and `stream` honored; sampling params accepted and ignored |
+
+In **TypingMind** → Settings → Custom Models → add a model with:
+
+- **Endpoint**: `https://your-host/v1/chat/completions`
+- **Model ID**: `conductor`
+- **API key**: whatever you set as `CONDUCTOR_API_KEY`
+
+```bash
+curl -X POST localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $CONDUCTOR_API_KEY" \
+  -d '{"model": "conductor", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+Streaming (`"stream": true`) returns standard `chat.completion.chunk` SSE
+events terminated by `data: [DONE]`. A request's optional `user` field scopes
+mem0 memory to that end user.
+
+**Set `CONDUCTOR_API_KEY` before exposing this publicly** — unset means no
+auth (matching `/api/chat`), and these endpoints spend your LLM credits.
+Because clients resend the whole conversation each turn, history is replayed
+into the prompt and trimmed from the front at ~12k characters.
+
 ### Checking plugin status
 
 `GET /health` reports both plugins, including which mem0 backend is live:
@@ -282,7 +372,15 @@ crawls; it blocks until the crawl job finishes, so keep the limit small.
 {
   "plugins": {
     "mem0": {"configured": true, "enabled": true, "backend": "platform"},
-    "firecrawl": {"configured": true, "enabled": true, "auto_fetch_urls": true}
+    "firecrawl": {"configured": true, "enabled": true, "auto_fetch_urls": true},
+    "livekit": {"configured": true, "enabled": true},
+    "dify": {"configured": false, "enabled": false},
+    "openhands": {"configured": false, "enabled": false}
+  },
+  "openai_compatible_api": {
+    "models_endpoint": "/v1/models",
+    "completions_endpoint": "/v1/chat/completions",
+    "auth_required": true
   }
 }
 ```

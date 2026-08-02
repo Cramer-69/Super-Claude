@@ -36,3 +36,5 @@ boto3>=1.34.46
 # for it. Both plugins are optional, so their absence just leaves the
 # feature disabled.
 firecrawl-py>=4.0.0
+# LiveKit token minting (~2 MB: pyjwt + protobuf stubs).
+livekit-api>=1.0.0
