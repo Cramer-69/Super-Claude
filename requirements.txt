@@ -21,3 +21,6 @@ httpx>=0.26.0
 gunicorn>=21.2.0
 google-generativeai>=0.3.0
 sentence-transformers==2.7.0
+
+# Persistent memory (shared brain across TypingMind + LiveKit)
+mem0ai>=0.1.0

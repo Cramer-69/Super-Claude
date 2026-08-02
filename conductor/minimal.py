@@ -8,6 +8,7 @@ import json
 import os
 from typing import Dict, Any, Iterator
 from config.settings import settings
+from conductor.memory import Mem0Memory
 from utils.logger import logger
 
 
@@ -34,7 +35,11 @@ class MinimalConductor:
         self.current_skill = None
         self.skill_manager = None
         self.provider, self.model = _provider_for_keys()
-        logger.info(f"MinimalConductor initialized (provider={self.provider}, model={self.model})")
+        self.memory = Mem0Memory()
+        logger.info(
+            f"MinimalConductor initialized (provider={self.provider}, "
+            f"model={self.model}, memory={'on' if self.memory.enabled else 'off'})"
+        )
 
     def activate_skill(self, skill_name: str) -> bool:
         return False
@@ -107,18 +112,29 @@ class MinimalConductor:
         )
         return resp.choices[0].message.content or ""
 
-    def chat(self, query: str, platform_filter: str = None) -> Dict[str, Any]:
+    def chat(
+        self, query: str, platform_filter: str = None, user_id: str = None
+    ) -> Dict[str, Any]:
+        # Search shared memory before replying, then fold it into the prompt.
+        memory_context = self.memory.search(query, user_id=user_id)
+        augmented = query
+        if memory_context:
+            augmented = (
+                "What you already know about this caller/user:\n"
+                f"{memory_context}\n\n"
+                f"Current message: {query}"
+            )
         try:
             if self.provider == "bedrock":
-                text = self._call_bedrock(query)
+                text = self._call_bedrock(augmented)
             elif self.provider == "google":
-                text = self._call_google(query)
+                text = self._call_google(augmented)
             elif self.provider == "openai":
-                text = self._call_openai(query)
+                text = self._call_openai(augmented)
             elif self.provider == "anthropic":
-                text = self._call_anthropic(query)
+                text = self._call_anthropic(augmented)
             elif self.provider == "xai":
-                text = self._call_xai(query)
+                text = self._call_xai(augmented)
             else:
                 text = (
                     "Minimal mode: no AI provider configured. "
@@ -129,11 +145,15 @@ class MinimalConductor:
             logger.error(f"MinimalConductor provider call failed ({self.provider}): {e}")
             text = f"Sorry — the {self.provider} provider failed: {type(e).__name__}: {e}"
 
+        # Write the exchange back so the next turn (voice or text) remembers it.
+        self.memory.add(query, text, user_id=user_id)
+
         return {
             "response": text,
             "sources": [],
-            "context_used": 0,
+            "context_used": 1 if memory_context else 0,
             "model": f"{self.provider}:{self.model}",
+            "memory": self.memory.enabled,
         }
 
     def stream_chat(self, query: str, platform_filter: str = None) -> Iterator[Dict[str, Any]]:
