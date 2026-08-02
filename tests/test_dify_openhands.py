@@ -97,7 +97,7 @@ class OpenHandsClientTests(unittest.TestCase):
     def _client(self, url="https://openhands.internal", key=None):
         with patch("integrations.openhands_client.settings") as mock_settings:
             mock_settings.openhands_base_url.return_value = url
-            mock_settings.openhands_api_key = key
+            mock_settings.openhands_key.return_value = key
             return OpenHandsClient()
 
     def test_disabled_without_a_base_url(self):

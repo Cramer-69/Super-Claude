@@ -215,6 +215,15 @@ class Settings(BaseSettings):
     def openhands_base_url(self) -> Optional[str]:
         return _real_key(self.openhands_api_url)
 
+    def openhands_key(self) -> Optional[str]:
+        """Return the OpenHands API key, or None if unset/placeholder.
+
+        Normalized like every other credential so a stray placeholder or a
+        pasted key with surrounding whitespace doesn't produce an
+        Authorization header the server rejects.
+        """
+        return _real_key(self.openhands_api_key)
+
     def openhands_configured(self) -> bool:
         return bool(self.openhands_base_url())
 

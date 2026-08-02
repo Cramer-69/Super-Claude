@@ -125,15 +125,16 @@ def is_fetchable_url(url: str) -> bool:
 
 
 def _is_public_address(address) -> bool:
-    """Whether an IP address is outside every private/reserved range."""
-    return not (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    )
+    """Whether an IP address is globally routable.
+
+    Deliberately an allowlist (`is_global`) rather than an enumeration of
+    private/reserved flags: ranges exist that are neither `is_private` nor
+    `is_reserved` yet still land inside an operator's network — 100.64/10
+    (CGNAT, also Tailscale's range) is the obvious one. `is_global` covers
+    those, plus loopback, link-local, multicast and unspecified, and fails
+    closed for any range added to the standard library later.
+    """
+    return bool(address.is_global)
 
 
 def _field(obj: Any, name: str) -> Any:

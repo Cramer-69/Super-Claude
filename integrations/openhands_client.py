@@ -25,7 +25,7 @@ class OpenHandsClient:
     def __init__(self) -> None:
         base = settings.openhands_base_url()
         self.base_url = base.rstrip("/") if base else None
-        self.api_key = settings.openhands_api_key
+        self.api_key = settings.openhands_key()
 
     @property
     def enabled(self) -> bool:

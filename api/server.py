@@ -296,6 +296,18 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _require_plugin_auth(authorization: Optional[str]) -> None:
+    """Gate the plugin routes on CONDUCTOR_API_KEY when one is configured.
+
+    These routes spend money or act with the server's credentials — a
+    Firecrawl scrape, a Dify message, a LiveKit publish token, an
+    OpenHands task — so they must not stay open when the operator has
+    told the server it is exposed. Unset means open, matching /api/chat
+    and the existing web UI.
+    """
+    _require_conductor_key(authorization)
+
+
 def _require_firecrawl():
     """Return an enabled Firecrawl client or fail with an actionable 503."""
     client = get_firecrawl_client()
@@ -312,7 +324,10 @@ def _require_firecrawl():
 
 
 @app.post("/api/web/scrape")
-async def web_scrape(request: ScrapeRequest):
+async def web_scrape(
+    request: ScrapeRequest,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Read a single web page as markdown via Firecrawl.
 
@@ -322,6 +337,7 @@ async def web_scrape(request: ScrapeRequest):
     Returns:
         The page's url, title and markdown content
     """
+    _require_plugin_auth(authorization)
     page = _require_firecrawl().scrape(request.url)
     if page is None:
         raise HTTPException(status_code=502, detail=f"Could not read {request.url}")
@@ -329,7 +345,10 @@ async def web_scrape(request: ScrapeRequest):
 
 
 @app.post("/api/web/search")
-async def web_search(request: WebSearchRequest):
+async def web_search(
+    request: WebSearchRequest,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Search the web via Firecrawl.
 
@@ -339,6 +358,7 @@ async def web_search(request: WebSearchRequest):
     Returns:
         A list of {url, title, content} results
     """
+    _require_plugin_auth(authorization)
     results = _require_firecrawl().search(request.query, limit=request.limit)
     return {"query": request.query, "results": results}
 
@@ -352,7 +372,10 @@ def _plugin_unavailable(name: str, hint: str) -> HTTPException:
 
 
 @app.post("/api/livekit/token")
-async def livekit_token(request: LiveKitTokenRequest):
+async def livekit_token(
+    request: LiveKitTokenRequest,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Mint a LiveKit join token for the browser client.
 
@@ -362,6 +385,7 @@ async def livekit_token(request: LiveKitTokenRequest):
     Returns:
         The token, the LiveKit server URL, and the token's lifetime
     """
+    _require_plugin_auth(authorization)
     client = get_livekit_client()
     if not client.enabled:
         raise _plugin_unavailable(
@@ -382,7 +406,10 @@ async def livekit_token(request: LiveKitTokenRequest):
 
 
 @app.post("/api/dify/chat")
-async def dify_chat(request: DifyChatRequest):
+async def dify_chat(
+    request: DifyChatRequest,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Send a message to the configured Dify app.
 
@@ -393,6 +420,7 @@ async def dify_chat(request: DifyChatRequest):
     Returns:
         The app's answer plus its conversation and message ids
     """
+    _require_plugin_auth(authorization)
     client = get_dify_client()
     if not client.enabled:
         raise _plugin_unavailable("Dify", "Set DIFY_API_KEY (and DIFY_API_URL if self-hosted).")
@@ -408,7 +436,10 @@ async def dify_chat(request: DifyChatRequest):
 
 
 @app.post("/api/openhands/conversations")
-async def openhands_start(request: OpenHandsTaskRequest):
+async def openhands_start(
+    request: OpenHandsTaskRequest,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Hand a task to OpenHands, starting a new conversation.
 
@@ -418,6 +449,7 @@ async def openhands_start(request: OpenHandsTaskRequest):
     Returns:
         The OpenHands server's response, passed through as-is
     """
+    _require_plugin_auth(authorization)
     client = get_openhands_client()
     if not client.enabled:
         raise _plugin_unavailable("OpenHands", "Set OPENHANDS_API_URL.")
@@ -428,7 +460,10 @@ async def openhands_start(request: OpenHandsTaskRequest):
 
 
 @app.get("/api/openhands/conversations/{conversation_id}")
-async def openhands_status(conversation_id: str):
+async def openhands_status(
+    conversation_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Read one OpenHands conversation's state.
 
@@ -438,6 +473,7 @@ async def openhands_status(conversation_id: str):
     Returns:
         The OpenHands server's response, passed through as-is
     """
+    _require_plugin_auth(authorization)
     client = get_openhands_client()
     if not client.enabled:
         raise _plugin_unavailable("OpenHands", "Set OPENHANDS_API_URL.")
@@ -686,24 +722,58 @@ def _completion_payload(text: str, model: str, completion_id: str) -> Dict[str, 
     }
 
 
-def _stream_completion(text: str, model: str, completion_id: str):
-    """Yield the answer as OpenAI-style SSE chunks."""
+def _sse_chunk(
+    completion_id: str,
+    model: str,
+    created: int,
+    delta: Dict[str, Any],
+    finish_reason: Optional[str] = None,
+) -> str:
+    """Render one OpenAI-style chat.completion.chunk SSE event."""
+    payload = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _stream_completion(generate, model: str, completion_id: str):
+    """Stream a completion, generating only after the response has opened.
+
+    `generate` is called *inside* the iterator, after the opening role
+    chunk has been flushed, so the client and any proxy in between see
+    headers and a first event immediately instead of waiting out the whole
+    provider call on a silent socket. The conductor's chat() is
+    synchronous, so the answer still arrives in one piece and the
+    subsequent chunks pace it out; what this buys is the open connection,
+    not token-by-token generation.
+
+    A failure after the stream has opened can't become an HTTP error code
+    any more, so it is delivered as a final content chunk instead.
+    """
     created = int(time.time())
+    yield _sse_chunk(completion_id, model, created, {"role": "assistant", "content": ""})
 
-    def chunk(delta: Dict[str, Any], finish_reason: Optional[str] = None) -> str:
-        payload = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
-        }
-        return f"data: {json.dumps(payload)}\n\n"
+    try:
+        text = generate()
+    except Exception as e:
+        logger.error(f"Error generating streamed completion: {e}")
+        yield _sse_chunk(
+            completion_id,
+            model,
+            created,
+            {"content": f"\n\n[error: {type(e).__name__}: {e}]"},
+        )
+        yield _sse_chunk(completion_id, model, created, {}, finish_reason="stop")
+        yield "data: [DONE]\n\n"
+        return
 
-    yield chunk({"role": "assistant", "content": ""})
     for i in range(0, len(text), 120):
-        yield chunk({"content": text[i : i + 120]})
-    yield chunk({}, finish_reason="stop")
+        yield _sse_chunk(completion_id, model, created, {"content": text[i : i + 120]})
+    yield _sse_chunk(completion_id, model, created, {}, finish_reason="stop")
     yield "data: [DONE]\n\n"
 
 
@@ -747,24 +817,38 @@ async def chat_completions(
     if not query:
         raise HTTPException(status_code=400, detail="messages must contain content")
 
-    try:
+    # Only the newest message drives Firecrawl's auto-fetch. The flattened
+    # query carries the whole history, and URLs from turns already answered
+    # would otherwise be re-scraped every turn — burning credits and
+    # crowding out the link actually being asked about.
+    latest = request.messages[-1].content.strip()
+
+    # The response is always labelled with the model this server actually
+    # serves, never the id the client asked for: the conductor routes to
+    # whichever provider is configured, so echoing "gpt-4" back would
+    # misattribute a Claude or Gemini answer in the caller's logs.
+    model = CONDUCTOR_MODEL_ID
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+
+    def generate() -> str:
         # request.user scopes durable memory per client-supplied end user;
         # None falls back to the shared default (see MEM0_DEFAULT_USER_ID).
-        result = get_conductor().chat(query=query, user_id=request.user)
-    except Exception as e:
-        logger.error(f"Error in chat completions endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    text = result["response"]
-    model = request.model or CONDUCTOR_MODEL_ID
-    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+        return get_conductor().chat(
+            query=query, user_id=request.user, url_source=latest
+        )["response"]
 
     if request.stream:
         return StreamingResponse(
-            _stream_completion(text, model, completion_id),
+            _stream_completion(generate, model, completion_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    try:
+        text = generate()
+    except Exception as e:
+        logger.error(f"Error in chat completions endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     return _completion_payload(text, model, completion_id)
 
 

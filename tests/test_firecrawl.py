@@ -86,6 +86,13 @@ class IsFetchableUrlTests(unittest.TestCase):
         ):
             self.assertFalse(self._check(url), url)
 
+    def test_non_global_ranges_outside_is_private_are_refused(self):
+        # 100.64/10 is CGNAT (also Tailscale's range) and 198.18/15 is the
+        # benchmarking range: neither is is_private on every Python, but
+        # both can reach an operator's network.
+        for url in ("http://100.64.0.1/", "http://198.18.0.1/", "http://192.0.2.1/"):
+            self.assertFalse(self._check(url), url)
+
     def test_private_addresses_allowed_when_opted_in(self):
         self.assertTrue(self._check("http://192.168.1.1/", allow_private=True))
         self.assertTrue(self._check("http://localhost:3002/", allow_private=True))

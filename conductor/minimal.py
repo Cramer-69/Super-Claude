@@ -157,7 +157,21 @@ class MinimalConductor:
         )
         return resp.choices[0].message.content or ""
 
-    def chat(self, query: str, platform_filter: str = None, user_id: str = None) -> Dict[str, Any]:
+    def chat(
+        self,
+        query: str,
+        platform_filter: str = None,
+        user_id: str = None,
+        url_source: str = None,
+    ) -> Dict[str, Any]:
+        """Answer `query`.
+
+        `url_source` is the text Firecrawl scans for URLs to read, and
+        defaults to the query itself. Callers that pack conversation
+        history into `query` (the OpenAI-compatible endpoint) pass just the
+        newest message here, so links from turns already answered aren't
+        fetched again.
+        """
         if user_id is None:
             if settings.mem0_configured():
                 logger.warning(
@@ -172,7 +186,7 @@ class MinimalConductor:
             for m in self.memory.search(query, user_id=user_id)
         ]
         memories = [m for m in memories if m]
-        web_pages = web_context_for_query(query)
+        web_pages = web_context_for_query(url_source if url_source is not None else query)
         system_prompt = self._system_prompt(memories, web_pages)
 
         try:

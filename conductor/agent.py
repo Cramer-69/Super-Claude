@@ -144,7 +144,8 @@ class ConductorAgent:
         query: str,
         platform_filter: str = None,
         max_context_tokens: int = 4000,
-        user_id: str = None
+        user_id: str = None,
+        url_source: str = None
     ) -> Dict[str, Any]:
         """
         Answer a query using RAG with conversation history.
@@ -154,6 +155,10 @@ class ConductorAgent:
             platform_filter: Optional platform to filter (chatgpt, gemini, grok, antigravity)
             max_context_tokens: Maximum tokens for context
             user_id: Identity to scope durable memory to (defaults to settings.mem0_default_user_id)
+            url_source: Text Firecrawl scans for URLs to read; defaults to
+                `query`. Callers that pack conversation history into `query`
+                pass just the newest message, so links from turns already
+                answered aren't fetched again.
 
         Returns:
             Dict with 'response', 'sources', and 'context_used'
@@ -209,7 +214,7 @@ class ConductorAgent:
                 )
 
         # Read any URLs the user mentioned (no-op unless Firecrawl is configured).
-        for page in web_context_for_query(query):
+        for page in web_context_for_query(url_source if url_source is not None else query):
             context_parts.append(format_web_context(page))
             sources.append({
                 'platform': 'web',
@@ -376,9 +381,21 @@ Please provide a helpful answer based on this context. Cite which conversations/
             context_parts.append(
                 f"[Source: {meta['platform'].upper()} - {meta['title']}]\n{content}"
             )
-        
+
+        # Same web reading as chat(): the CLI drives this path, so without
+        # it a configured Firecrawl would do nothing for local questions
+        # that mention a URL.
+        for page in web_context_for_query(query):
+            context_parts.append(format_web_context(page))
+            sources.append({
+                'platform': 'web',
+                'title': page['title'] or page['url'],
+                'url': page['url'],
+                'score': 1.0,
+            })
+
         context = "\n\n---\n\n".join(context_parts)
-        
+
         # Build prompt
         base_system_prompt = """You are a helpful AI assistant with access to the user's conversation history across multiple AI platforms (ChatGPT, Gemini, Grok, and Antigravity).
 

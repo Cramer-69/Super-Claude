@@ -360,7 +360,11 @@ events terminated by `data: [DONE]`. A request's optional `user` field scopes
 mem0 memory to that end user.
 
 **Set `CONDUCTOR_API_KEY` before exposing this publicly** — unset means no
-auth (matching `/api/chat`), and these endpoints spend your LLM credits.
+auth (matching `/api/chat`), and these endpoints spend your LLM credits. The
+same key also gates every plugin route (`/api/web/*`, `/api/livekit/token`,
+`/api/dify/chat`, `/api/openhands/*`), since those spend Firecrawl/Dify credits,
+mint publish-capable LiveKit tokens, or start OpenHands tasks with the server's
+credentials. Requests without it get a 401 before any plugin client is touched.
 Because clients resend the whole conversation each turn, history is replayed
 into the prompt and trimmed from the front at ~12k characters.
 
