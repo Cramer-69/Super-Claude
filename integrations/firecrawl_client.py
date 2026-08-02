@@ -8,8 +8,10 @@ swallows errors and logs instead of raising — a scrape that fails must
 degrade a chat answer, never break the request.
 """
 
+import ipaddress
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from config.settings import settings
 from utils.logger import logger
@@ -57,6 +59,50 @@ def sanitize_web_text(text: str, max_chars: Optional[int] = None) -> str:
     return cleaned.strip()[:max_chars]
 
 
+def safe_url_for_log(url: str) -> str:
+    """Render a URL for a log line: no control characters, bounded length."""
+    return repr(_CONTROL_CHARS.sub("", url or "")[:200])
+
+
+def is_fetchable_url(url: str) -> bool:
+    """Whether `url` is safe to hand to Firecrawl.
+
+    URLs reaching here are user-controlled — a chat query can name any link.
+    Against the hosted API the fetch happens on Firecrawl's infrastructure,
+    but a self-hosted instance runs inside the operator's network, where an
+    internal URL would turn this into an SSRF primitive. So loopback,
+    private, link-local and other reserved addresses are refused unless
+    FIRECRAWL_ALLOW_PRIVATE_HOSTS says otherwise.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    if settings.firecrawl_allow_private_hosts:
+        return True
+
+    host = parsed.hostname.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # A hostname rather than a literal address. Resolving it here would
+        # only give a TOCTOU check — Firecrawl does its own DNS lookup — so
+        # names are allowed through and literal addresses are what we screen.
+        return True
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
+
+
 def _field(obj: Any, name: str) -> Any:
     """Read `name` off a Firecrawl result, which may be a pydantic model or
     a plain dict depending on SDK version and endpoint."""
@@ -91,7 +137,13 @@ class FirecrawlClient:
         if not settings.firecrawl_configured():
             return
         try:
-            kwargs: Dict[str, Any] = {"api_key": settings.firecrawl_key()}
+            # Pass api_key only when there is one: a self-hosted instance may
+            # not need a key, and SDK versions differ on whether they accept
+            # an explicit None.
+            kwargs: Dict[str, Any] = {}
+            api_key = settings.firecrawl_key()
+            if api_key:
+                kwargs["api_key"] = api_key
             if settings.firecrawl_api_url:
                 kwargs["api_url"] = settings.firecrawl_api_url
             self.client = Firecrawl(**kwargs)
@@ -107,10 +159,13 @@ class FirecrawlClient:
         """Fetch a single page as markdown. Returns None on any failure."""
         if not self.enabled:
             return None
+        if not is_fetchable_url(url):
+            logger.warning(f"Refusing to scrape {safe_url_for_log(url)}")
+            return None
         try:
             document = self.client.scrape(url, formats=["markdown"])
         except Exception as e:
-            logger.warning(f"Firecrawl scrape({url}) failed: {e}")
+            logger.warning(f"Firecrawl scrape({safe_url_for_log(url)}) failed: {e}")
             return None
         page = _as_page(document)
         if page and not page["url"]:
@@ -152,10 +207,13 @@ class FirecrawlClient:
         """
         if not self.enabled:
             return []
+        if not is_fetchable_url(url):
+            logger.warning(f"Refusing to crawl {safe_url_for_log(url)}")
+            return []
         try:
             job = self.client.crawl(url, limit=limit, formats=["markdown"])
         except Exception as e:
-            logger.warning(f"Firecrawl crawl({url}) failed: {e}")
+            logger.warning(f"Firecrawl crawl({safe_url_for_log(url)}) failed: {e}")
             return []
 
         pages = []

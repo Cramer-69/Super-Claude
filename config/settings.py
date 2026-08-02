@@ -11,10 +11,18 @@ from typing import Optional
 
 
 def _real_key(value: Optional[str]) -> Optional[str]:
-    """Return `value` unless it's empty or a `.env.example` placeholder."""
-    if not value or value.startswith("your_"):
+    """Return `value` unless it's blank or a `.env.example` placeholder.
+
+    Whitespace is stripped first, so a key that's only spaces (easy to end
+    up with from a shell export or a copy-pasted .env line) reads as unset
+    rather than marking a provider or plugin configured.
+    """
+    if not value:
         return None
-    return value
+    stripped = value.strip()
+    if not stripped or stripped.startswith("your_"):
+        return None
+    return stripped
 
 
 class Settings(BaseSettings):
@@ -55,6 +63,11 @@ class Settings(BaseSettings):
     # Auto-read URLs the user mentions in a chat query.
     firecrawl_auto_fetch_urls: bool = True
     firecrawl_max_urls_per_query: int = 2
+    # Allow fetching loopback/private/link-local hosts. Off by default: a
+    # self-hosted Firecrawl sits inside your network, so an attacker-supplied
+    # URL would otherwise reach internal services. Turn on only when you
+    # deliberately crawl an internal site.
+    firecrawl_allow_private_hosts: bool = False
 
     # Model Configuration
     conductor_model: str = "gpt-4o-mini"

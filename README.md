@@ -242,7 +242,15 @@ FIRECRAWL_API_URL=http://localhost:3002   # self-hosted instance
 FIRECRAWL_AUTO_FETCH_URLS=true            # read URLs mentioned in a query
 FIRECRAWL_MAX_URLS_PER_QUERY=2
 FIRECRAWL_MAX_CONTENT_CHARS=4000          # per-page cap sent to the model
+FIRECRAWL_ALLOW_PRIVATE_HOSTS=false       # allow loopback/private targets
 ```
+
+URLs pointing at loopback, private, link-local or otherwise reserved addresses
+(including the cloud metadata endpoint) are refused before they reach the SDK.
+Against the hosted API the fetch happens on Firecrawl's infrastructure anyway,
+but a self-hosted instance runs inside your network, where a pasted link would
+otherwise be an SSRF primitive. Set `FIRECRAWL_ALLOW_PRIVATE_HOSTS=true` only
+when you deliberately crawl an internal site.
 
 With auto-fetch on (the default once a key is set), any http(s) URL in a chat
 query is scraped to markdown and added to the prompt, and the page shows up in

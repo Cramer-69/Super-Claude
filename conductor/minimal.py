@@ -161,7 +161,7 @@ class MinimalConductor:
         if user_id is None:
             if settings.mem0_configured():
                 logger.warning(
-                    "mem0 is enabled but chat() was called without an explicit "
+                    "mem0 is configured but chat() was called without an explicit "
                     "user_id; falling back to the shared default user_id. In a "
                     "multi-user deployment this can leak memories across users — "
                     "callers should always pass user_id."
@@ -202,7 +202,7 @@ class MinimalConductor:
         return {
             "response": text,
             "sources": [
-                {"platform": "web", "title": page["title"], "url": page["url"]}
+                {"platform": "web", "title": page["title"] or page["url"], "url": page["url"]}
                 for page in web_pages
             ],
             "context_used": sum(len(page["content"]) for page in web_pages),

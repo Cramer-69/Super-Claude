@@ -126,6 +126,23 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(store.backend, "oss")
         self.assertIs(store.client, oss)
 
+    def test_platform_key_never_falls_back_to_the_oss_client(self):
+        # Falling back would quietly spend OpenAI credits and write vectors
+        # to local disk after the user opted into the hosted platform.
+        oss = MagicMock()
+
+        with patch("knowledge_base.memory.MEM0_AVAILABLE", True), \
+             patch("knowledge_base.memory.MemoryClient", None), \
+             patch("knowledge_base.memory.Memory", return_value=oss) as mock_oss, \
+             patch("knowledge_base.memory.settings") as mock_settings:
+            mock_settings.mem0_configured.return_value = True
+            mock_settings.mem0_platform_key.return_value = "m0-test"
+            store = MemoryStore()
+
+        mock_oss.assert_not_called()
+        self.assertFalse(store.enabled)
+        self.assertIsNone(store.backend)
+
     def test_platform_key_without_hosted_class_disables_store(self):
         with patch("knowledge_base.memory.MEM0_AVAILABLE", True), \
              patch("knowledge_base.memory.MemoryClient", None), \

@@ -22,6 +22,17 @@ class Mem0SettingsTests(unittest.TestCase):
         self.assertFalse(settings.mem0_configured())
         self.assertIsNone(settings.mem0_platform_key())
 
+    def test_whitespace_only_key_is_not_a_key(self):
+        settings = Settings(_env_file=None, mem0_api_key="   ")
+
+        self.assertFalse(settings.mem0_configured())
+        self.assertIsNone(settings.mem0_platform_key())
+
+    def test_surrounding_whitespace_is_stripped(self):
+        settings = Settings(_env_file=None, mem0_api_key="  m0-real\n")
+
+        self.assertEqual(settings.mem0_platform_key(), "m0-real")
+
     def test_oss_backend_needs_the_explicit_flag(self):
         settings = Settings(_env_file=None, mem0_enabled=True)
 
@@ -46,6 +57,12 @@ class FirecrawlSettingsTests(unittest.TestCase):
         settings = Settings(_env_file=None, firecrawl_api_key="your_firecrawl_api_key_here")
 
         self.assertFalse(settings.firecrawl_configured())
+
+    def test_whitespace_only_key_is_not_a_key(self):
+        settings = Settings(_env_file=None, firecrawl_api_key=" ")
+
+        self.assertFalse(settings.firecrawl_configured())
+        self.assertIsNone(settings.firecrawl_key())
 
     def test_self_hosted_url_is_enough(self):
         settings = Settings(_env_file=None, firecrawl_api_url="http://localhost:3002")

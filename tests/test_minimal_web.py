@@ -35,6 +35,16 @@ class MinimalConductorWebContextTests(unittest.TestCase):
         )
         self.assertEqual(result["context_used"], len("the page body"))
 
+    def test_untitled_page_falls_back_to_its_url_as_the_source_title(self):
+        conductor = self._make_conductor()
+        page = {"url": "https://example.com/a", "title": "", "content": "body"}
+
+        with patch("conductor.minimal.web_context_for_query", return_value=[page]), \
+             patch.object(conductor, "_call_openai", return_value="ok"):
+            result = conductor.chat("summarize https://example.com/a", user_id="u1")
+
+        self.assertEqual(result["sources"][0]["title"], "https://example.com/a")
+
     def test_no_web_context_leaves_prompt_and_sources_untouched(self):
         conductor = self._make_conductor()
 

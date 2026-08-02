@@ -162,7 +162,7 @@ class ConductorAgent:
         if user_id is None:
             if settings.mem0_configured():
                 logger.warning(
-                    "mem0 is enabled but chat() was called without an explicit "
+                    "mem0 is configured but chat() was called without an explicit "
                     "user_id; falling back to the shared default user_id. In a "
                     "multi-user deployment this can leak memories across users — "
                     "callers should always pass user_id."

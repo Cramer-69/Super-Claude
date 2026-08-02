@@ -57,7 +57,17 @@ class MemoryStore:
 
         platform_key = settings.mem0_platform_key()
         try:
-            if platform_key and MemoryClient is not None:
+            if platform_key:
+                # Never silently fall back to the OSS client here: the user
+                # opted into the hosted platform, and the OSS backend spends
+                # OpenAI credits and writes vectors to local disk instead.
+                if MemoryClient is None:
+                    logger.warning(
+                        "MEM0_API_KEY is set but mem0's MemoryClient could not "
+                        "be imported; durable memory disabled. Upgrade mem0ai "
+                        "or unset MEM0_API_KEY to use the OSS backend."
+                    )
+                    return
                 self.client = MemoryClient(api_key=platform_key)
                 self.backend = "platform"
             elif Memory is not None:
