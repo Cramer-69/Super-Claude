@@ -198,7 +198,12 @@ no key means no client, no network calls, and no behavior change — and neither
 can break a chat request: every call fails soft and logs a warning.
 
 Install them with the normal requirements (`pip install -r requirements.txt`);
-they are also in `requirements-cloud.txt`, so cloud deploys get them too.
+they are also in `requirements-cloud.txt`, so cloud deploys get them too. The
+one exception is Vercel, whose serverless bundle (`api/requirements.txt`) ships
+Firecrawl but not `mem0ai` — it would pull ~55 MB of vector-store dependencies
+toward the 250 MB function limit for a backend that needs local storage a
+serverless function doesn't have. Use Render, Cloud Run or Docker for durable
+memory.
 
 ### mem0 — durable, cross-session memory
 
