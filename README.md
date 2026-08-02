@@ -259,7 +259,7 @@ characters and labelled as untrusted data — set `FIRECRAWL_AUTO_FETCH_URLS=fal
 to keep the plugin available to the endpoints below without touching chat.
 
 Two endpoints expose it directly (both return `503` when Firecrawl isn't
-configured):
+configured; `limit` is capped at 20 results per search):
 
 ```bash
 curl -X POST localhost:8080/api/web/scrape \

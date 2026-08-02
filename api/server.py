@@ -17,7 +17,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 # NOTE: ConductorAgent is imported lazily inside get_conductor() (full mode
 # only). It pulls in ChromaDB, which is intentionally excluded from
 # requirements-cloud.txt; importing it here would break cloud/minimal
@@ -112,6 +112,10 @@ except OSError as exc:
     )
 
 
+# Upper bound for /api/web/search results per request.
+MAX_WEB_SEARCH_LIMIT = 20
+
+
 # Request/Response Models
 class ChatRequest(BaseModel):
     query: str
@@ -134,7 +138,9 @@ class ScrapeRequest(BaseModel):
 
 class WebSearchRequest(BaseModel):
     query: str
-    limit: int = 5
+    # Capped: each result costs Firecrawl credits and request latency, so an
+    # unbounded limit is an easy way to run up a bill or stall a worker.
+    limit: int = Field(default=5, ge=1, le=MAX_WEB_SEARCH_LIMIT)
 
 
 # In-memory voice settings (could be persisted later)

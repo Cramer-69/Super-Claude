@@ -10,6 +10,7 @@ degrade a chat answer, never break the request.
 
 import ipaddress
 import re
+import socket
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -55,13 +56,27 @@ def sanitize_web_text(text: str, max_chars: Optional[int] = None) -> str:
     """
     if max_chars is None:
         max_chars = settings.firecrawl_max_content_chars
-    cleaned = _CONTROL_CHARS.sub("", text or "").replace("\r\n", "\n")
-    return cleaned.strip()[:max_chars]
+    # Normalize CRLF *and* lone CR to LF first: a bare \r survives the
+    # control-character class (it's excluded so markdown line breaks live)
+    # but overwrites a rendered line in most terminals and log viewers.
+    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return _CONTROL_CHARS.sub("", normalized).strip()[:max_chars]
+
+
+def safe_text_for_log(text: str, max_chars: int = 200) -> str:
+    """Render untrusted text for a log line: single line, bounded length.
+
+    Newlines are stripped as well as control characters — a query or URL
+    that carries its own "\\n[CRITICAL] ..." must not be able to forge a
+    second log entry.
+    """
+    collapsed = " ".join(_CONTROL_CHARS.sub("", text or "").split())
+    return repr(collapsed[:max_chars])
 
 
 def safe_url_for_log(url: str) -> str:
     """Render a URL for a log line: no control characters, bounded length."""
-    return repr(_CONTROL_CHARS.sub("", url or "")[:200])
+    return safe_text_for_log(url)
 
 
 def is_fetchable_url(url: str) -> bool:
@@ -87,12 +102,30 @@ def is_fetchable_url(url: str) -> bool:
     if host == "localhost" or host.endswith(".localhost"):
         return False
     try:
-        address = ipaddress.ip_address(host)
+        return _is_public_address(ipaddress.ip_address(host))
     except ValueError:
-        # A hostname rather than a literal address. Resolving it here would
-        # only give a TOCTOU check — Firecrawl does its own DNS lookup — so
-        # names are allowed through and literal addresses are what we screen.
+        pass  # A hostname rather than a literal address.
+
+    # A name can resolve straight to 127.0.0.1 or 169.254.169.254, so a
+    # literal-address check alone is bypassable. Against the hosted API that
+    # doesn't matter — the fetch runs on Firecrawl's infrastructure, not
+    # ours — so the DNS round trip is spent only when a self-hosted instance
+    # makes internal addresses reachable. Resolution is inherently TOCTOU
+    # (Firecrawl resolves again when it fetches); this raises the bar rather
+    # than closing the hole, and an operator who needs internal crawling
+    # should set FIRECRAWL_ALLOW_PRIVATE_HOSTS instead.
+    if not settings.firecrawl_api_url:
         return True
+    try:
+        resolved = socket.getaddrinfo(host, None)
+    except socket.gaierror as e:
+        logger.warning(f"Could not resolve {safe_text_for_log(host)}: {e}")
+        return False
+    return all(_is_public_address(ipaddress.ip_address(info[4][0])) for info in resolved)
+
+
+def _is_public_address(address) -> bool:
+    """Whether an IP address is outside every private/reserved range."""
     return not (
         address.is_private
         or address.is_loopback
@@ -179,7 +212,7 @@ class FirecrawlClient:
         try:
             data = self.client.search(query, limit=limit)
         except Exception as e:
-            logger.warning(f"Firecrawl search({query[:60]}) failed: {e}")
+            logger.warning(f"Firecrawl search({safe_text_for_log(query, 60)}) failed: {e}")
             return []
 
         results: List[Dict[str, str]] = []

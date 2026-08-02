@@ -34,6 +34,10 @@ class SanitizeWebTextTests(unittest.TestCase):
         result = sanitize_web_text("# Title\n\nbody\x00text\x07")
         self.assertEqual(result, "# Title\n\nbodytext")
 
+    def test_carriage_returns_become_newlines(self):
+        # A bare \r would otherwise overwrite the rendered line.
+        self.assertEqual(sanitize_web_text("one\r\ntwo\rthree"), "one\ntwo\nthree")
+
     def test_truncates_to_max_chars(self):
         self.assertEqual(len(sanitize_web_text("a" * 10_000, max_chars=100)), 100)
 
@@ -50,9 +54,12 @@ class FormatWebContextTests(unittest.TestCase):
 
 
 class IsFetchableUrlTests(unittest.TestCase):
-    def _check(self, url, allow_private=False):
+    def _check(self, url, allow_private=False, self_hosted=False):
         with patch("integrations.firecrawl_client.settings") as mock_settings:
             mock_settings.firecrawl_allow_private_hosts = allow_private
+            mock_settings.firecrawl_api_url = (
+                "http://localhost:3002" if self_hosted else None
+            )
             return is_fetchable_url(url)
 
     def test_public_http_urls_are_allowed(self):
@@ -83,9 +90,33 @@ class IsFetchableUrlTests(unittest.TestCase):
         self.assertTrue(self._check("http://192.168.1.1/", allow_private=True))
         self.assertTrue(self._check("http://localhost:3002/", allow_private=True))
 
-    def test_hostnames_are_not_resolved(self):
-        # DNS is Firecrawl's to do; resolving here would only be a TOCTOU check.
-        self.assertTrue(self._check("https://internal.corp/"))
+    def test_hostnames_are_not_resolved_against_the_hosted_api(self):
+        # The hosted API fetches from Firecrawl's own infrastructure, so a
+        # DNS round trip here would buy nothing.
+        with patch("integrations.firecrawl_client.socket.getaddrinfo") as mock_dns:
+            self.assertTrue(self._check("https://internal.corp/"))
+        mock_dns.assert_not_called()
+
+    def test_self_hosted_mode_rejects_names_resolving_to_private_addresses(self):
+        with patch(
+            "integrations.firecrawl_client.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("127.0.0.1", 0))],
+        ):
+            self.assertFalse(self._check("https://sneaky.example/", self_hosted=True))
+
+    def test_self_hosted_mode_allows_names_resolving_to_public_addresses(self):
+        with patch(
+            "integrations.firecrawl_client.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+        ):
+            self.assertTrue(self._check("https://example.com/", self_hosted=True))
+
+    def test_unresolvable_names_are_refused_in_self_hosted_mode(self):
+        with patch(
+            "integrations.firecrawl_client.socket.getaddrinfo",
+            side_effect=__import__("socket").gaierror("nope"),
+        ):
+            self.assertFalse(self._check("https://nope.invalid/", self_hosted=True))
 
 
 class SafeUrlForLogTests(unittest.TestCase):
