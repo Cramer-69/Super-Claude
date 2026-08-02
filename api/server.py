@@ -23,6 +23,8 @@ from pydantic import BaseModel
 # requirements-cloud.txt; importing it here would break cloud/minimal
 # deploys (Render, Cloud Run, Bedrock) on startup with ModuleNotFoundError.
 from voice.voice_processor import get_voice_processor
+from integrations.firecrawl_client import get_firecrawl_client
+from knowledge_base.memory import get_memory_store
 from utils.logger import logger
 from config.settings import settings
 
@@ -126,6 +128,15 @@ class VoiceSettings(BaseModel):
     voice: str = "nova"
 
 
+class ScrapeRequest(BaseModel):
+    url: str
+
+
+class WebSearchRequest(BaseModel):
+    query: str
+    limit: int = 5
+
+
 # In-memory voice settings (could be persisted later)
 current_voice_settings = VoiceSettings()
 
@@ -168,6 +179,7 @@ async def _startup_log_config():
 async def health_check():
     """Health check endpoint."""
     providers = settings.configured_providers()
+    memory = get_memory_store()
     return {
         "status": "healthy",
         "service": "conductor-voice-agent",
@@ -175,6 +187,18 @@ async def health_check():
         "mode": "minimal" if _is_cloud() else "full",
         "providers": providers,
         "api_keys_configured": bool(providers),
+        "plugins": {
+            "mem0": {
+                "configured": settings.mem0_configured(),
+                "enabled": memory.enabled,
+                "backend": memory.backend,
+            },
+            "firecrawl": {
+                "configured": settings.firecrawl_configured(),
+                "enabled": get_firecrawl_client().enabled,
+                "auto_fetch_urls": settings.firecrawl_auto_fetch_urls,
+            },
+        },
     }
 
 
@@ -205,6 +229,53 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _require_firecrawl():
+    """Return an enabled Firecrawl client or fail with an actionable 503."""
+    client = get_firecrawl_client()
+    if not client.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Firecrawl is not available. Install firecrawl-py and set "
+                "FIRECRAWL_API_KEY (or FIRECRAWL_API_URL for a self-hosted "
+                "instance). See README -> Plugins."
+            ),
+        )
+    return client
+
+
+@app.post("/api/web/scrape")
+async def web_scrape(request: ScrapeRequest):
+    """
+    Read a single web page as markdown via Firecrawl.
+
+    Args:
+        request: Scrape request with the page URL
+
+    Returns:
+        The page's url, title and markdown content
+    """
+    page = _require_firecrawl().scrape(request.url)
+    if page is None:
+        raise HTTPException(status_code=502, detail=f"Could not read {request.url}")
+    return page
+
+
+@app.post("/api/web/search")
+async def web_search(request: WebSearchRequest):
+    """
+    Search the web via Firecrawl.
+
+    Args:
+        request: Search request with the query and a result limit
+
+    Returns:
+        A list of {url, title, content} results
+    """
+    results = _require_firecrawl().search(request.query, limit=request.limit)
+    return {"query": request.query, "results": results}
 
 
 @app.post("/api/voice-chat")

@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 
+def _real_key(value: Optional[str]) -> Optional[str]:
+    """Return `value` unless it's empty or a `.env.example` placeholder."""
+    if not value or value.startswith("your_"):
+        return None
+    return value
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
@@ -30,10 +37,24 @@ class Settings(BaseSettings):
     aws_bedrock_model_id: Optional[str] = None
 
     # Durable cross-session memory (mem0). Off by default: requires the
-    # optional `mem0ai` package and, in its default config, an OpenAI key
-    # for mem0's own LLM/embedder calls.
+    # optional `mem0ai` package and either a MEM0_API_KEY (hosted mem0
+    # platform) or, for the self-hosted/OSS backend, an OpenAI key for
+    # mem0's own LLM/embedder calls. Setting MEM0_API_KEY is itself an
+    # opt-in, so MEM0_ENABLED is only needed for the OSS backend.
     mem0_enabled: bool = False
+    mem0_api_key: Optional[str] = None
     mem0_default_user_id: str = "default"
+
+    # Web reading via Firecrawl (https://firecrawl.dev). Off by default:
+    # requires the optional `firecrawl-py` package plus a FIRECRAWL_API_KEY
+    # (or FIRECRAWL_API_URL pointing at a self-hosted instance).
+    firecrawl_api_key: Optional[str] = None
+    firecrawl_api_url: Optional[str] = None
+    # Per-page cap on scraped text handed to a model, in characters.
+    firecrawl_max_content_chars: int = 4000
+    # Auto-read URLs the user mentions in a chat query.
+    firecrawl_auto_fetch_urls: bool = True
+    firecrawl_max_urls_per_query: int = 2
 
     # Model Configuration
     conductor_model: str = "gpt-4o-mini"
@@ -114,6 +135,31 @@ class Settings(BaseSettings):
         """Check whether AWS Bedrock Claude is configured."""
         return bool(self.bedrock_region())
 
+    def mem0_platform_key(self) -> Optional[str]:
+        """Return the hosted mem0 platform key, or None if unset/placeholder."""
+        return _real_key(self.mem0_api_key)
+
+    def mem0_configured(self) -> bool:
+        """Check whether durable memory is opted into.
+
+        A hosted platform key counts as an opt-in on its own; the OSS
+        backend needs the explicit MEM0_ENABLED flag because it silently
+        spends OpenAI credits on mem0's own LLM/embedder calls.
+        """
+        return bool(self.mem0_enabled or self.mem0_platform_key())
+
+    def firecrawl_key(self) -> Optional[str]:
+        """Return the Firecrawl API key, or None if unset/placeholder."""
+        return _real_key(self.firecrawl_api_key)
+
+    def firecrawl_configured(self) -> bool:
+        """Check whether Firecrawl is opted into.
+
+        A self-hosted instance (FIRECRAWL_API_URL) may not need a key, so
+        either setting is enough.
+        """
+        return bool(self.firecrawl_key() or self.firecrawl_api_url)
+
     def configured_providers(self) -> list[str]:
         """Return names of providers with a non-placeholder key set."""
         candidates = {
@@ -123,10 +169,7 @@ class Settings(BaseSettings):
             "xai": self.xai_api_key,
             "perplexity": self.perplexity_api_key,
         }
-        providers = [
-            name for name, key in candidates.items()
-            if key and not key.startswith("your_")
-        ]
+        providers = [name for name, key in candidates.items() if _real_key(key)]
         if self.bedrock_configured():
             providers.insert(0, "bedrock")
         return providers

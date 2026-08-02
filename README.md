@@ -10,6 +10,9 @@ A local-first AI system that aggregates conversations from **Grok**, **ChatGPT**
 - **Code Snippet Extraction**: Automatically extracts and indexes code from all conversations
 - **Privacy First**: Runs 100% locally on your machine
 - **Rich CLI Interface**: Beautiful terminal interface with search and filtering
+- **Optional Plugins**: mem0 for durable cross-session memory, Firecrawl for
+  reading and searching the web — both off until you add a key
+  ([Plugins](#-plugins))
 
 ## 🚀 Quick Start (Windows)
 
@@ -147,10 +150,13 @@ conductor_agent/
 │   ├── gemini_processor.py
 │   ├── grok_processor.py
 │   └── antigravity_processor.py
-├── knowledge_base/      # Vector store and retrieval
+├── knowledge_base/      # Vector store, retrieval and durable memory
 │   ├── embeddings.py
 │   ├── vector_store.py
+│   ├── memory.py       # mem0 plugin (cross-session memory)
 │   └── retrieval.py
+├── integrations/        # Optional third-party plugins
+│   └── firecrawl_client.py  # Firecrawl plugin (web reading/search)
 ├── cli/                 # Command-line interface
 │   └── interactive.py
 ├── utils/               # Utilities
@@ -184,6 +190,92 @@ TOP_K=5
 # Data Paths
 ANTIGRAVITY_BRAIN_DIR=C:/Users/jjc29/.gemini/antigravity/brain
 ```
+
+## 🔌 Plugins
+
+Two optional plugins ship with the agent. Both are **inert until configured** —
+no key means no client, no network calls, and no behavior change — and neither
+can break a chat request: every call fails soft and logs a warning.
+
+Install them with the normal requirements (`pip install -r requirements.txt`);
+they are also in `requirements-cloud.txt`, so cloud deploys get them too.
+
+### mem0 — durable, cross-session memory
+
+Remembers facts across conversations and folds them back into the system
+prompt on later turns. Two backends:
+
+```env
+# Hosted mem0 platform — the key alone turns memory on
+MEM0_API_KEY=m0-...
+
+# ...or the self-hosted/OSS backend, which needs the explicit flag plus an
+# OpenAI key for mem0's own LLM/embedder calls, and stores vectors locally
+MEM0_ENABLED=true
+OPENAI_API_KEY=sk-...
+
+# Identity used when a caller doesn't pass user_id (see the warning below)
+MEM0_DEFAULT_USER_ID=default
+```
+
+Memories are scoped per `user_id`. Pass one explicitly from any multi-user
+caller — `chat()` logs a warning and falls back to the shared default user
+otherwise, which would let memories leak between users. Stored memories are
+sanitized and labelled as untrusted background data in the prompt, never as
+instructions.
+
+### Firecrawl — web reading and search
+
+Lets the agent read pages and search the web via
+[Firecrawl](https://firecrawl.dev):
+
+```env
+FIRECRAWL_API_KEY=fc-...
+
+# Optional
+FIRECRAWL_API_URL=http://localhost:3002   # self-hosted instance
+FIRECRAWL_AUTO_FETCH_URLS=true            # read URLs mentioned in a query
+FIRECRAWL_MAX_URLS_PER_QUERY=2
+FIRECRAWL_MAX_CONTENT_CHARS=4000          # per-page cap sent to the model
+```
+
+With auto-fetch on (the default once a key is set), any http(s) URL in a chat
+query is scraped to markdown and added to the prompt, and the page shows up in
+the response's `sources`. Fetched content is capped, stripped of control
+characters and labelled as untrusted data — set `FIRECRAWL_AUTO_FETCH_URLS=false`
+to keep the plugin available to the endpoints below without touching chat.
+
+Two endpoints expose it directly (both return `503` when Firecrawl isn't
+configured):
+
+```bash
+curl -X POST localhost:8080/api/web/scrape \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "https://firecrawl.dev"}'
+
+curl -X POST localhost:8080/api/web/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "firecrawl python sdk", "limit": 3}'
+```
+
+`FirecrawlClient.crawl(url, limit=...)` is available in Python for multi-page
+crawls; it blocks until the crawl job finishes, so keep the limit small.
+
+### Checking plugin status
+
+`GET /health` reports both plugins, including which mem0 backend is live:
+
+```json
+{
+  "plugins": {
+    "mem0": {"configured": true, "enabled": true, "backend": "platform"},
+    "firecrawl": {"configured": true, "enabled": true, "auto_fetch_urls": true}
+  }
+}
+```
+
+`configured` means the settings are present; `enabled` means the client
+actually came up (a bad key, for instance, leaves it `false`).
 
 ## 🎨 CLI Commands
 
@@ -254,6 +346,14 @@ At least one LLM provider configuration:
 | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
 | `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys |
 | `GOOGLE_API_KEY` | https://aistudio.google.com/app/apikey |
+
+Optional plugin keys (see [Plugins](#-plugins)); leave them unset to deploy
+without either plugin:
+
+| Variable | Where to get it |
+|---|---|
+| `MEM0_API_KEY` | https://app.mem0.ai/dashboard/api-keys |
+| `FIRECRAWL_API_KEY` | https://www.firecrawl.dev/app/api-keys |
 
 The container binds to `0.0.0.0:${PORT}` (default `8080`). Cloud Run / Render
 inject `PORT` automatically.

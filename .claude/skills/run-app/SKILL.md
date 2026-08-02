@@ -109,6 +109,9 @@ A fresh container has no LLM key, so these are expected — not failures:
   message (HTTP 200), **not** a real answer.
 - `GET /api/voices` → **500**; the voice processor hard-requires
   `OPENAI_API_KEY` at init.
+- `/health` → `"plugins"` with both mem0 and Firecrawl `"configured":false,
+  "enabled":false`, and `POST /api/web/scrape` → **503**; the plugins stay
+  inert until `MEM0_API_KEY` / `FIRECRAWL_API_KEY` are set (README → Plugins).
 - The UI loads Tailwind from a CDN, which the container's outbound proxy
   blocks (SSL handshake errors in the log). Inline gradient/layout still
   render; only utility-class styling is missing.
