@@ -28,8 +28,17 @@ class Mem0Memory:
         # Resolve config at construction, not import, so env overrides (and
         # tests that patch the environment) are honored.
         self.user_id = user_id or os.getenv("ARA_MEMORY_USER_ID", DEFAULT_USER_ID)
-        self.search_limit = int(os.getenv("MEM0_SEARCH_LIMIT", "5"))
+        self.search_limit = self._int_env("MEM0_SEARCH_LIMIT", 5)
         self._client = self._build_client()
+
+    @staticmethod
+    def _int_env(name: str, default: int) -> int:
+        # Tolerate misconfiguration: a non-integer must not break fail-open.
+        try:
+            return int(os.getenv(name, str(default)))
+        except (TypeError, ValueError):
+            logger.warning(f"{name} is not an integer; using default {default}.")
+            return default
 
     @staticmethod
     def _build_client():
