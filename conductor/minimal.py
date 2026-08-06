@@ -182,31 +182,23 @@ class MinimalConductor:
             elif self.provider == "xai":
                 text = self._call_xai(query, system_prompt)
             else:
-                succeeded = False
                 text = (
                     "Minimal mode: no AI provider configured. "
                     "Set AWS_REGION (for Bedrock Claude), OPENAI_API_KEY, "
                     "GOOGLE_API_KEY, ANTHROPIC_API_KEY or XAI_API_KEY."
                 )
         except Exception as e:
-            succeeded = False
             logger.error(f"MinimalConductor provider call failed ({self.provider}): {e}")
             text = f"Sorry — the {self.provider} provider failed: {type(e).__name__}: {e}"
         else:
             self.memory.add(query, user_id=user_id, role="user")
             self.memory.add(text, user_id=user_id, role="assistant")
 
-        # Only persist real replies; never write error/fallback strings into
-        # shared memory, or they pollute future prompts.
-        if succeeded:
-            self.memory.add(query, text, user_id=user_id)
-
         return {
             "response": text,
             "sources": [],
-            "context_used": 1 if memory_context else 0,
+            "context_used": 0,
             "model": f"{self.provider}:{self.model}",
-            "memory": self.memory.enabled,
         }
 
     def stream_chat(self, query: str, platform_filter: str = None) -> Iterator[Dict[str, Any]]:
