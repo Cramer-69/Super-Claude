@@ -1,0 +1,30 @@
+# Vercel serverless function dependencies.
+#
+# Vercel's @vercel/python builder installs the requirements.txt located next
+# to the entrypoint (this file) instead of the heavy root requirements.txt.
+# Keep this light: the root requirements.txt pins sentence-transformers
+# (PyTorch, ~1 GB) + chromadb + langchain, which blow past Vercel's 250 MB
+# serverless function limit. On Vercel the app runs in minimal mode
+# (VERCEL is detected as a cloud env), so none of those heavy deps are needed.
+#
+# NOTE: this list is intentionally self-contained rather than
+# `-r ../requirements-cloud.txt`. That include resolves fine with pip's own
+# parser locally, but broke Vercel's actual build (both projects went from
+# Ready to Error on the commit that introduced it) — Vercel's Python builder
+# isolates the function's own directory and does not have the repo root's
+# requirements-cloud.txt available at build time. Keep this list manually in
+# sync with requirements-cloud.txt instead.
+fastapi>=0.109.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.6
+jinja2>=3.1.3
+aiofiles>=23.2.0
+httpx>=0.26.0
+requests>=2.31.0
+rich>=13.7.0
+openai>=1.10.0
+anthropic>=0.18.0
+google-generativeai>=0.3.0
+boto3>=1.34.46

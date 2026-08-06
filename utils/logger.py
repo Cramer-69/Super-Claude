@@ -32,18 +32,31 @@ def setup_logger(name: str = "conductor_agent") -> logging.Logger:
     # Remove existing handlers to avoid duplicates
     logger.handlers.clear()
     
-    # File handler
-    log_file = Path(settings.log_file)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    file_formatter = logging.Formatter(
-        '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    file_handler.setFormatter(file_formatter)
-    
+    # File handler (best-effort). Serverless/read-only filesystems — e.g.
+    # Vercel, where only /tmp is writable — would otherwise crash the whole
+    # app at import time on the mkdir/open below. If the log location isn't
+    # writable, fall back to console-only logging instead of failing.
+    try:
+        log_file = Path(settings.log_file)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter(
+            '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+    except OSError as exc:
+        # Read-only filesystem (or otherwise unwritable log path): fall back
+        # to console-only logging, but make the fallback discoverable.
+        print(
+            f"[logger] file logging disabled (log_file={settings.log_file!r}: "
+            f"{exc}); using console only",
+            file=sys.stderr,
+        )
+
     # Rich console handler
     console_handler = RichHandler(
         console=console,
@@ -52,8 +65,7 @@ def setup_logger(name: str = "conductor_agent") -> logging.Logger:
         show_path=False
     )
     console_handler.setLevel(logging.INFO)
-    
-    logger.addHandler(file_handler)
+
     logger.addHandler(console_handler)
     
     return logger
