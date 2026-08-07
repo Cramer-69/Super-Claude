@@ -9,6 +9,8 @@
           "api/static/**",
           "conductor/**",
           "config/**",
+          "knowledge_base/**",
+          "skills/**",
           "utils/**",
           "voice/**"
         ]
