@@ -10,6 +10,21 @@ from pathlib import Path
 from typing import Optional
 
 
+def _real_key(value: Optional[str]) -> Optional[str]:
+    """Return `value` unless it's blank or a `.env.example` placeholder.
+
+    Whitespace is stripped first, so a key that's only spaces (easy to end
+    up with from a shell export or a copy-pasted .env line) reads as unset
+    rather than marking a provider or plugin configured.
+    """
+    if not value:
+        return None
+    stripped = value.strip()
+    if not stripped or stripped.startswith("your_"):
+        return None
+    return stripped
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
@@ -30,10 +45,50 @@ class Settings(BaseSettings):
     aws_bedrock_model_id: Optional[str] = None
 
     # Durable cross-session memory (mem0). Off by default: requires the
-    # optional `mem0ai` package and, in its default config, an OpenAI key
-    # for mem0's own LLM/embedder calls.
+    # optional `mem0ai` package and either a MEM0_API_KEY (hosted mem0
+    # platform) or, for the self-hosted/OSS backend, an OpenAI key for
+    # mem0's own LLM/embedder calls. Setting MEM0_API_KEY is itself an
+    # opt-in, so MEM0_ENABLED is only needed for the OSS backend.
     mem0_enabled: bool = False
+    mem0_api_key: Optional[str] = None
     mem0_default_user_id: str = "default"
+
+    # Web reading via Firecrawl (https://firecrawl.dev). Off by default:
+    # requires the optional `firecrawl-py` package plus a FIRECRAWL_API_KEY
+    # (or FIRECRAWL_API_URL pointing at a self-hosted instance).
+    firecrawl_api_key: Optional[str] = None
+    firecrawl_api_url: Optional[str] = None
+    # Per-page cap on scraped text handed to a model, in characters.
+    firecrawl_max_content_chars: int = 4000
+    # Auto-read URLs the user mentions in a chat query.
+    firecrawl_auto_fetch_urls: bool = True
+    firecrawl_max_urls_per_query: int = 2
+    # Allow fetching loopback/private/link-local hosts. Off by default: a
+    # self-hosted Firecrawl sits inside your network, so an attacker-supplied
+    # URL would otherwise reach internal services. Turn on only when you
+    # deliberately crawl an internal site.
+    firecrawl_allow_private_hosts: bool = False
+
+    # Realtime voice rooms via LiveKit. Off until all three are set.
+    livekit_url: Optional[str] = None
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None
+    livekit_token_ttl_seconds: int = 3600
+
+    # Dify app backend (https://dify.ai). Off until an app key is set.
+    dify_api_key: Optional[str] = None
+    dify_api_url: str = "https://api.dify.ai/v1"
+
+    # OpenHands agent runtime. Off until its base URL is set.
+    openhands_api_url: Optional[str] = None
+    openhands_api_key: Optional[str] = None
+
+    # Shared HTTP timeout for the plugin clients above, in seconds.
+    plugin_http_timeout: float = 30.0
+
+    # Optional bearer token guarding the OpenAI-compatible endpoints.
+    # Unset means unauthenticated, matching /api/chat.
+    conductor_api_key: Optional[str] = None
 
     # Model Configuration
     conductor_model: str = "gpt-4o-mini"
@@ -114,6 +169,68 @@ class Settings(BaseSettings):
         """Check whether AWS Bedrock Claude is configured."""
         return bool(self.bedrock_region())
 
+    def mem0_platform_key(self) -> Optional[str]:
+        """Return the hosted mem0 platform key, or None if unset/placeholder."""
+        return _real_key(self.mem0_api_key)
+
+    def mem0_configured(self) -> bool:
+        """Check whether durable memory is opted into.
+
+        A hosted platform key counts as an opt-in on its own; the OSS
+        backend needs the explicit MEM0_ENABLED flag because it silently
+        spends OpenAI credits on mem0's own LLM/embedder calls.
+        """
+        return bool(self.mem0_enabled or self.mem0_platform_key())
+
+    def firecrawl_key(self) -> Optional[str]:
+        """Return the Firecrawl API key, or None if unset/placeholder."""
+        return _real_key(self.firecrawl_api_key)
+
+    def firecrawl_configured(self) -> bool:
+        """Check whether Firecrawl is opted into.
+
+        A self-hosted instance (FIRECRAWL_API_URL) may not need a key, so
+        either setting is enough.
+        """
+        return bool(self.firecrawl_key() or self.firecrawl_api_url)
+
+    def livekit_credentials(self) -> Optional[tuple[str, str, str]]:
+        """Return (url, api_key, api_secret), or None if any is missing."""
+        url = _real_key(self.livekit_url)
+        key = _real_key(self.livekit_api_key)
+        secret = _real_key(self.livekit_api_secret)
+        if url and key and secret:
+            return url, key, secret
+        return None
+
+    def livekit_configured(self) -> bool:
+        return self.livekit_credentials() is not None
+
+    def dify_key(self) -> Optional[str]:
+        return _real_key(self.dify_api_key)
+
+    def dify_configured(self) -> bool:
+        return bool(self.dify_key())
+
+    def openhands_base_url(self) -> Optional[str]:
+        return _real_key(self.openhands_api_url)
+
+    def openhands_key(self) -> Optional[str]:
+        """Return the OpenHands API key, or None if unset/placeholder.
+
+        Normalized like every other credential so a stray placeholder or a
+        pasted key with surrounding whitespace doesn't produce an
+        Authorization header the server rejects.
+        """
+        return _real_key(self.openhands_api_key)
+
+    def openhands_configured(self) -> bool:
+        return bool(self.openhands_base_url())
+
+    def conductor_key(self) -> Optional[str]:
+        """Bearer token required by the OpenAI-compatible API, if any."""
+        return _real_key(self.conductor_api_key)
+
     def configured_providers(self) -> list[str]:
         """Return names of providers with a non-placeholder key set."""
         candidates = {
@@ -123,10 +240,7 @@ class Settings(BaseSettings):
             "xai": self.xai_api_key,
             "perplexity": self.perplexity_api_key,
         }
-        providers = [
-            name for name, key in candidates.items()
-            if key and not key.startswith("your_")
-        ]
+        providers = [name for name, key in candidates.items() if _real_key(key)]
         if self.bedrock_configured():
             providers.insert(0, "bedrock")
         return providers

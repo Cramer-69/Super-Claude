@@ -19,3 +19,10 @@ openai>=1.10.0
 anthropic>=0.18.0
 boto3>=1.34.46
 google-generativeai>=0.3.0
+
+# Optional plugins. Both are pure-Python HTTP clients and stay inert
+# unless configured (MEM0_API_KEY / MEM0_ENABLED, FIRECRAWL_API_KEY),
+# so they are safe to ship in the lean cloud image.
+mem0ai>=0.1.0
+firecrawl-py>=4.0.0
+livekit-api>=1.0.0
