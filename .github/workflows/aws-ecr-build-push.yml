@@ -1,33 +1,26 @@
 name: Build and push to Amazon ECR
 
 # Builds the existing Dockerfile and pushes it to Amazon ECR on every push to
-# main. This is the first real piece of the AWS deployment path: once an
-# image is in ECR, App Runner (or ECS) can deploy directly from it.
+# main. Authentication uses GitHub OIDC — GitHub mints a short-lived token and
+# AWS exchanges it for credentials that expire in about an hour.
 #
-# One-time setup required in the AWS console (us-west-2):
-#   1. Create an ECR repository named "super-claude".
-#   2. Create an IAM user with permission to push to that repository
-#      (the AWS-managed policy "AmazonEC2ContainerRegistryPowerUser" covers this).
-#   3. Generate an access key for that IAM user.
+# There are NO stored AWS keys. Nothing to leak, nothing to rotate.
 #
-# Then add these as GitHub repo secrets (Settings -> Secrets and variables ->
-# Actions -> New repository secret) -- paste each value directly into GitHub's
-# own secret field, never into a chat or a file in this repo:
-#   AWS_ACCESS_KEY_ID
-#   AWS_SECRET_ACCESS_KEY
+# One-time AWS setup (already scripted, run once in CloudShell):
+#   1. GitHub registered as an OIDC identity provider
+#   2. IAM role "gha-super-claude" trusting only repo:Cramer-69/Super-Claude
+#   3. Inline policy allowing push to the "super-claude" ECR repo only
+#   4. ECR repository "super-claude" in us-west-2
 #
-# Nothing else needs to change here. The workflow below reads only those two
-# secrets and the fixed values (region, repository name) declared as env vars.
+# Then one GitHub VARIABLE (Settings -> Secrets and variables -> Actions ->
+# Variables tab). A role ARN is not a secret:
+#   AWS_ROLE_ARN = arn:aws:iam::209479275988:role/gha-super-claude
 
 on:
   push:
     branches: [main]
   workflow_dispatch: {}
 
-# Pushes the mutable "latest" tag, so concurrent runs from rapid successive
-# pushes to main could race and let a slower, older run overwrite "latest"
-# with a stale image. Cancel any in-progress run for this workflow when a
-# newer one starts, so only the most recent push ever wins.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -38,6 +31,7 @@ env:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   build-and-push:
@@ -46,15 +40,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Docker Buildx
-        # Required for cache-to: type=gha -- the default "docker" build
-        # driver cannot export to the GitHub Actions cache backend.
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to Amazon ECR
