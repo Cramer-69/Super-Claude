@@ -79,7 +79,9 @@ class MemoryStore:
                     "importable; durable memory disabled."
                 )
         except Exception as e:
-            logger.warning(f"Could not initialize mem0 client: {e}")
+            logger.warning(
+                f"Could not initialize mem0 client: {type(e).__name__}"
+            )
             self.client = None
             self.backend = None
         else:
@@ -96,17 +98,24 @@ class MemoryStore:
         try:
             self.client.add([{"role": role, "content": text}], user_id=user_id)
         except Exception as e:
-            logger.warning(f"mem0 add() failed: {e}")
+            logger.warning(f"mem0 add() failed: {type(e).__name__}")
 
     def search(self, query: str, user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
         if not self.enabled:
             return []
         try:
-            result = self.client.search(query, user_id=user_id, limit=limit)
+            if self.backend == "platform":
+                result = self.client.search(
+                    query,
+                    filters={"user_id": user_id},
+                    limit=limit,
+                )
+            else:
+                result = self.client.search(query, user_id=user_id, limit=limit)
             items = result.get("results", []) if isinstance(result, dict) else list(result)
             return [item if isinstance(item, dict) else {"memory": str(item)} for item in items]
         except Exception as e:
-            logger.warning(f"mem0 search() failed: {e}")
+            logger.warning(f"mem0 search() failed: {type(e).__name__}")
             return []
 
 
