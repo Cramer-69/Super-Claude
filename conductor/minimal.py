@@ -59,7 +59,7 @@ def _provider_for_keys() -> tuple:
     if openai_key and openai_key.startswith("sk-"):
         return "openai", "gpt-4o-mini"
     if _use_key("GOOGLE_API_KEY", settings.google_api_key):
-        return "google", "gemini-1.5-flash"
+        return "google", "gemini-flash-latest"
     if settings.bedrock_configured():
         return "bedrock", settings.bedrock_model()
     return "none", "minimal"

@@ -72,7 +72,7 @@ class ConductorAgent:
                 self.model = settings.bedrock_model()
             elif GOOGLE_AVAILABLE and settings.google_api_key:
                 self.provider = "google"
-                self.model = "gemini-1.5-flash"  # Working model
+                self.model = "gemini-flash-latest"  # Working model
             elif settings.xai_api_key:
                 self.provider = "grok"
                 self.model = "grok-2-latest"
