@@ -77,6 +77,95 @@ async function callOpenAI(env, messages, useWebSearch) {
   return { text: outputText(data), raw: data };
 }
 
+async function callPerplexity(env, messages) {
+  if (!env.PERPLEXITY_API_KEY) throw new Error("PERPLEXITY_API_KEY is not configured");
+  const response = await fetch("https://api.perplexity.ai/chat/completions", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.PERPLEXITY_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: env.PERPLEXITY_MODEL || "sonar",
+      messages,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const detail = data?.error?.message || `Perplexity returned ${response.status}`;
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
+  }
+  return { text: data?.choices?.[0]?.message?.content || "", raw: data };
+}
+
+async function callAnthropic(env, messages) {
+  if (!env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not configured");
+  const system = messages.find((m) => m.role === "system")?.content;
+  const turns = messages.filter((m) => m.role !== "system");
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+      max_tokens: 2048,
+      ...(system ? { system } : {}),
+      messages: turns,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const detail = data?.error?.message || `Anthropic returned ${response.status}`;
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
+  }
+  const text = (data?.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+  return { text, raw: data };
+}
+
+async function callXAI(env, messages) {
+  if (!env.XAI_API_KEY) throw new Error("XAI_API_KEY is not configured");
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.XAI_API_KEY}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: env.XAI_MODEL || "grok-4",
+      messages,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const detail = data?.error?.message || `xAI returned ${response.status}`;
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
+  }
+  return { text: data?.choices?.[0]?.message?.content || "", raw: data };
+}
+
+const PROVIDERS = {
+  openai: (env, messages, useWebSearch) => callOpenAI(env, messages, useWebSearch),
+  perplexity: (env, messages) => callPerplexity(env, messages),
+  anthropic: (env, messages) => callAnthropic(env, messages),
+  xai: (env, messages) => callXAI(env, messages),
+};
+
+async function callProvider(env, provider, messages, useWebSearch) {
+  const key = String(provider || "openai").toLowerCase();
+  const handler = PROVIDERS[key];
+  if (!handler) throw new Error(`Unknown provider: ${key}. Supported: ${Object.keys(PROVIDERS).join(", ")}`);
+  return handler(env, messages, useWebSearch);
+}
+
 async function proxyOpenAIResponses(request, env) {
   if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
   const payload = await bodyJson(request);
@@ -171,17 +260,21 @@ async function chat(request, env, openAICompatible) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return json({ error: "messages or query is required" }, 400, env);
   }
-  const result = await callOpenAI(env, messages, Boolean(body.web_search || body.use_web_search));
+  // OpenAI stays the default lead conductor for backward compatibility.
+  // Pass { "provider": "perplexity" | "anthropic" | "xai" } to route elsewhere.
+  const provider = body.provider || "openai";
+  const result = await callProvider(env, provider, messages, Boolean(body.web_search || body.use_web_search));
   if (openAICompatible) {
     return json({
       id: `chatcmpl_${uuid()}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: env.OPENAI_MODEL || "gpt-5.4-mini",
+      provider,
       choices: [{ index: 0, message: { role: "assistant", content: result.text }, finish_reason: "stop" }],
     }, 200, env);
   }
-  return json({ response: result.text, model: env.OPENAI_MODEL || "gpt-5.4-mini" }, 200, env);
+  return json({ response: result.text, model: env.OPENAI_MODEL || "gpt-5.4-mini", provider }, 200, env);
 }
 
 function mcpResponse(id, result, env) {
@@ -275,7 +368,12 @@ export default {
       return json({
         status: "ok",
         service: "ara-conductor",
-        providers: { openai: Boolean(env.OPENAI_API_KEY), perplexity: Boolean(env.PERPLEXITY_API_KEY), anthropic: Boolean(env.ANTHROPIC_API_KEY) },
+        providers: {
+          openai: Boolean(env.OPENAI_API_KEY),
+          perplexity: Boolean(env.PERPLEXITY_API_KEY),
+          anthropic: Boolean(env.ANTHROPIC_API_KEY),
+          xai: Boolean(env.XAI_API_KEY),
+        },
         memory: Boolean(env.DB),
         mcp: "/mcp",
       }, 200, env);
