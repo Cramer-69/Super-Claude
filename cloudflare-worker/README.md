@@ -18,11 +18,12 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put BRIDGE_API_KEY
 ```
 
-Optional providers can be added later without changing the public contract:
+Optional providers (selectable per-request via `"provider": "perplexity" | "anthropic" | "xai"` in the request body; OpenAI remains the default):
 
 ```sh
 npx wrangler secret put PERPLEXITY_API_KEY
 npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put XAI_API_KEY
 ```
 
 ## Initialize persistence
