@@ -174,9 +174,7 @@ class ConductorAgent:
                 )
             user_id = settings.mem0_default_user_id
 
-        # Retrieve relevant context
-        logger.info(f"Processing query: {query[:100]}...")
-
+        # Retrieve relevant context without logging user-supplied text.
         results = self.retriever.search_conversations(
             query=query,
             n_results=5,
@@ -337,7 +335,7 @@ Please provide a helpful answer based on this context. Cite which conversations/
             }
 
         except Exception as e:
-            logger.error(f"Error generating response: {e}")
+            logger.error(f"Error generating response: {type(e).__name__}")
             raise
     
     def stream_chat(
@@ -446,8 +444,8 @@ Please provide a helpful answer based on this context. Cite which conversations/
                     yield {'type': 'content', 'data': chunk.choices[0].delta.content}
                     
         except Exception as e:
-            logger.error(f"Error streaming response: {e}")
-            yield {'type': 'error', 'data': str(e)}
+            logger.error(f"Error streaming response: {type(e).__name__}")
+            yield {'type': 'error', 'data': 'Upstream provider request failed'}
 
 
 if __name__ == "__main__":

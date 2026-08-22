@@ -6,9 +6,15 @@ local deps.
 """
 import json
 import os
+import re
+from dataclasses import dataclass
 from typing import Dict, Any, Iterator
 from config.settings import settings
-from integrations.firecrawl_client import format_web_context, web_context_for_query
+from integrations.firecrawl_client import (
+    format_web_context,
+    get_firecrawl_client,
+    web_context_for_query,
+)
 from knowledge_base.memory import get_memory_store, sanitize_memory_text
 from utils.logger import logger
 
@@ -44,25 +50,45 @@ def _use_key(env_var: str, settings_value):
 
 
 def _provider_for_keys() -> tuple:
-    """Pick (provider, model) based on which key is configured.
-
-    Direct/"home field" provider APIs take precedence — Claude via the
-    Anthropic API, Grok via xAI — so having AWS credentials in the
-    environment does not silently route through Bedrock. Bedrock is used
-    only as a last resort, when no direct provider key is configured.
-    """
-    if _use_key("ANTHROPIC_API_KEY", settings.anthropic_api_key):
-        return "anthropic", "claude-3-5-haiku-latest"
-    if _use_key("XAI_API_KEY", settings.xai_api_key):
-        return "xai", "grok-2-latest"
-    openai_key = _use_key("OPENAI_API_KEY", settings.openai_api_key)
-    if openai_key and openai_key.startswith("sk-"):
-        return "openai", "gpt-4o-mini"
-    if _use_key("GOOGLE_API_KEY", settings.google_api_key):
-        return "google", "gemini-1.5-flash"
-    if settings.bedrock_configured():
-        return "bedrock", settings.bedrock_model()
+    """Return only the explicitly selected primary provider and model."""
+    primary = settings.conductor_primary_provider.strip().lower()
+    direct = {
+        "openai": ("OPENAI_API_KEY", settings.openai_api_key, settings.openai_model),
+        "anthropic": (
+            "ANTHROPIC_API_KEY",
+            settings.anthropic_api_key,
+            "claude-3-5-haiku-latest",
+        ),
+        "xai": ("XAI_API_KEY", settings.xai_api_key, "grok-2-latest"),
+        "google": ("GOOGLE_API_KEY", settings.google_api_key, "gemini-1.5-flash"),
+    }
+    if primary == "bedrock":
+        if settings.bedrock_configured():
+            return "bedrock", settings.bedrock_model()
+        return "none", "minimal"
+    selected = direct.get(primary)
+    if selected:
+        env_var, configured_key, model = selected
+        if _use_key(env_var, configured_key):
+            return primary, model
     return "none", "minimal"
+
+
+_WEB_SEARCH_REQUEST = re.compile(
+    r"\b(?:search|browse)\s+(?:the\s+)?web\b|\blook\s+up\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_web_search(query: str) -> bool:
+    """Recognize an explicit request before spending one Firecrawl credit."""
+    return bool(_WEB_SEARCH_REQUEST.search(query or ""))
+
+
+@dataclass(frozen=True)
+class ProviderResult:
+    text: str
+    usage: Dict[str, int]
 
 
 class MinimalConductor:
@@ -122,17 +148,29 @@ class MinimalConductor:
             if block.get("type") == "text"
         )
 
-    def _call_openai(self, query: str, system_prompt: str) -> str:
+    def _call_openai(self, query: str, system_prompt: str) -> ProviderResult:
         from openai import OpenAI
-        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        resp = client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
+
+        client = OpenAI(
+            api_key=os.environ["OPENAI_API_KEY"],
+            timeout=settings.provider_timeout_seconds,
+            max_retries=settings.provider_max_retries,
         )
-        return resp.choices[0].message.content or ""
+        resp = client.responses.create(
+            model=self.model,
+            instructions=system_prompt,
+            input=query,
+            max_output_tokens=settings.openai_max_output_tokens,
+        )
+        usage = getattr(resp, "usage", None)
+        return ProviderResult(
+            text=resp.output_text or "",
+            usage={
+                "prompt_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+                "completion_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+                "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+            },
+        )
 
     def _call_anthropic(self, query: str, system_prompt: str) -> str:
         import anthropic
@@ -187,29 +225,49 @@ class MinimalConductor:
         ]
         memories = [m for m in memories if m]
         web_pages = web_context_for_query(url_source if url_source is not None else query)
+        if _wants_web_search(query):
+            firecrawl = get_firecrawl_client()
+            if firecrawl.enabled:
+                searched = firecrawl.search(
+                    query,
+                    limit=min(3, max(1, settings.firecrawl_search_limit)),
+                )
+                seen_urls = {page.get("url") for page in web_pages}
+                for page in searched[:3]:
+                    if page.get("url") not in seen_urls:
+                        web_pages.append(page)
+                        seen_urls.add(page.get("url"))
         system_prompt = self._system_prompt(memories, web_pages)
 
         try:
             if self.provider == "bedrock":
-                text = self._call_bedrock(query, system_prompt)
+                provider_result = self._call_bedrock(query, system_prompt)
             elif self.provider == "google":
-                text = self._call_google(query, system_prompt)
+                provider_result = self._call_google(query, system_prompt)
             elif self.provider == "openai":
-                text = self._call_openai(query, system_prompt)
+                provider_result = self._call_openai(query, system_prompt)
             elif self.provider == "anthropic":
-                text = self._call_anthropic(query, system_prompt)
+                provider_result = self._call_anthropic(query, system_prompt)
             elif self.provider == "xai":
-                text = self._call_xai(query, system_prompt)
+                provider_result = self._call_xai(query, system_prompt)
             else:
-                text = (
-                    "Minimal mode: no AI provider configured. "
-                    "Set AWS_REGION (for Bedrock Claude), OPENAI_API_KEY, "
-                    "GOOGLE_API_KEY, ANTHROPIC_API_KEY or XAI_API_KEY."
+                raise RuntimeError(
+                    "The explicit primary provider is not configured. "
+                    "Set CONDUCTOR_PRIMARY_PROVIDER and its server-side credentials."
                 )
         except Exception as e:
-            logger.error(f"MinimalConductor provider call failed ({self.provider}): {e}")
-            text = f"Sorry — the {self.provider} provider failed: {type(e).__name__}: {e}"
+            logger.error(
+                f"MinimalConductor provider call failed ({self.provider}): "
+                f"{type(e).__name__}"
+            )
+            raise
         else:
+            if isinstance(provider_result, ProviderResult):
+                text = provider_result.text
+                usage = provider_result.usage
+            else:
+                text = provider_result
+                usage = {}
             self.memory.add(query, user_id=user_id, role="user")
             self.memory.add(text, user_id=user_id, role="assistant")
 
@@ -221,6 +279,7 @@ class MinimalConductor:
             ],
             "context_used": sum(len(page["content"]) for page in web_pages),
             "model": f"{self.provider}:{self.model}",
+            "usage": usage,
         }
 
     def stream_chat(self, query: str, platform_filter: str = None) -> Iterator[Dict[str, Any]]:

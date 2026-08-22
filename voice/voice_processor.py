@@ -36,7 +36,7 @@ class VoiceProcessor:
             Transcribed text
         """
         try:
-            logger.info(f"Transcribing audio file: {audio_file_path}")
+            logger.info("Transcribing audio")
             
             with open(audio_file_path, "rb") as audio_file:
                 transcript = self.client.audio.transcriptions.create(
@@ -45,11 +45,11 @@ class VoiceProcessor:
                     response_format="text"
                 )
             
-            logger.info(f"Transcription complete: {transcript[:100]}...")
+            logger.info("Transcription complete")
             return transcript
             
         except Exception as e:
-            logger.error(f"Error transcribing audio: {e}")
+            logger.error(f"Transcription failed: {type(e).__name__}")
             raise
     
     async def synthesize_speech(
@@ -75,7 +75,7 @@ class VoiceProcessor:
             if not output_path:
                 output_path = Path("temp_audio.mp3")
             
-            logger.info(f"Synthesizing speech with voice '{voice}': {text[:100]}...")
+            logger.info(f"Synthesizing speech with voice '{voice}'")
             
             response = self.client.audio.speech.create(
                 model=self.tts_model,
@@ -91,7 +91,7 @@ class VoiceProcessor:
             return output_path
             
         except Exception as e:
-            logger.error(f"Error synthesizing speech: {e}")
+            logger.error(f"Speech synthesis failed: {type(e).__name__}")
             raise
     
     def get_available_voices(self) -> list:

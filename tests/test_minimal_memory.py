@@ -6,8 +6,13 @@ from conductor.minimal import MinimalConductor
 
 class MinimalConductorMemoryTests(unittest.TestCase):
     def _make_conductor(self):
-        with patch("conductor.minimal._provider_for_keys", return_value=("openai", "gpt-4o-mini")), \
-             patch("conductor.minimal.get_memory_store") as mock_get_store:
+        with (
+            patch(
+                "conductor.minimal._provider_for_keys",
+                return_value=("openai", "gpt-4o-mini"),
+            ),
+            patch("conductor.minimal.get_memory_store") as mock_get_store,
+        ):
             mock_memory = MagicMock()
             mock_get_store.return_value = mock_memory
             conductor = MinimalConductor()
@@ -29,9 +34,9 @@ class MinimalConductorMemoryTests(unittest.TestCase):
         mock_memory.search.return_value = []
 
         with patch.object(conductor, "_call_openai", side_effect=RuntimeError("boom")):
-            result = conductor.chat("hello", user_id="u1")
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                conductor.chat("hello", user_id="u1")
 
-        self.assertIn("boom", result["response"])
         mock_memory.add.assert_not_called()
 
     def test_memory_written_on_provider_success(self):

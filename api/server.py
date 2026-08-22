@@ -17,9 +17,10 @@ import secrets
 import time
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 # NOTE: ConductorAgent is imported lazily inside get_conductor() (full mode
 # only). It pulls in ChromaDB, which is intentionally excluded from
@@ -55,7 +56,15 @@ conductor = None
 voice_processor = None
 
 
-_CLOUD_ENV_VARS = ("K_SERVICE", "RENDER", "RAILWAY", "HEROKU", "VERCEL")
+_CLOUD_ENV_VARS = (
+    "CONDUCTOR_CLOUD_MODE",
+    "AWS_APPRUNNER_SERVICE_ARN",
+    "K_SERVICE",
+    "RENDER",
+    "RAILWAY",
+    "HEROKU",
+    "VERCEL",
+)
 
 
 def _is_cloud() -> bool:
@@ -83,7 +92,9 @@ def get_conductor():
                 conductor = ConductorAgent()
                 logger.info("Using full conductor (local mode - with memory)")
         except Exception as e:
-            logger.error(f"Failed to initialize conductor: {e}")
+            logger.error(
+                f"Failed to initialize conductor: {type(e).__name__}"
+            )
             # Ultimate fallback - minimal conductor
             try:
                 from conductor.minimal import MinimalConductor
@@ -211,16 +222,58 @@ async def root():
 
 @app.on_event("startup")
 async def _startup_log_config():
-    """Log API-key configuration so missing keys are obvious in cloud logs."""
+    """Validate the cloud security boundary and log sanitized configuration."""
+    if _is_cloud() and not settings.conductor_key():
+        raise RuntimeError(
+            "CONDUCTOR_API_KEY is required in cloud mode; refusing to expose "
+            "credit-spending routes without bearer authentication."
+        )
     providers = settings.configured_providers()
     if providers:
         logger.info(f"Configured LLM providers: {', '.join(providers)}")
     else:
         logger.warning(
             "No LLM provider configured. The /api/chat endpoint will fail "
-            "until AWS_REGION (for Bedrock Claude) or another provider key is set. "
+            "until the explicit primary provider key is set. "
             "See README -> Deploy."
         )
+
+
+@app.get("/health/live")
+async def health_live():
+    """Process-only health check for App Runner."""
+    return {"status": "live"}
+
+
+def _readiness_payload() -> tuple[Dict[str, Any], bool]:
+    """Return sanitized readiness details and whether every core is usable."""
+    providers = settings.configured_providers()
+    primary = settings.conductor_primary_provider.strip().lower()
+    memory = get_memory_store()
+    firecrawl = get_firecrawl_client()
+    checks = {
+        "gateway_auth": bool(settings.conductor_key()),
+        "primary_provider": primary in providers,
+        "mem0_hosted": bool(
+            settings.mem0_configured()
+            and memory.enabled
+            and memory.backend == "platform"
+        ),
+        "firecrawl": bool(settings.firecrawl_configured() and firecrawl.enabled),
+    }
+    ready = all(checks.values())
+    return {
+        "status": "ready" if ready else "not_ready",
+        "primary_provider": primary,
+        "checks": checks,
+    }, ready
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Sanitized provider, hosted-memory, web, and gateway readiness."""
+    payload, ready = _readiness_payload()
+    return JSONResponse(payload, status_code=200 if ready else 503)
 
 
 @app.get("/health")
@@ -268,7 +321,10 @@ async def health_check():
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Text-based chat endpoint.
 
@@ -278,22 +334,35 @@ async def chat(request: ChatRequest):
     Returns:
         Chat response with answer and sources
     """
+    _require_conductor_key(authorization)
+    request_id = f"chat-{uuid.uuid4().hex}"
+    started = time.monotonic()
     try:
-        logger.info(f"Chat request: {request.query[:100]}...")
-
         result = get_conductor().chat(
             query=request.query,
             platform_filter=request.platform_filter
         )
-
+        latency_ms = int((time.monotonic() - started) * 1000)
+        usage = result.get("usage") or {}
+        logger.info(
+            f"request_id={request_id} model=conductor latency_ms={latency_ms} "
+            f"status=200 usage={json.dumps(usage, sort_keys=True)}"
+        )
         return ChatResponse(
             response=result['response'],
             sources=result['sources']
         )
-
     except Exception as e:
-        logger.error(f"Error in chat endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        status_code = _provider_error_status(e)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        logger.error(
+            f"request_id={request_id} model=conductor latency_ms={latency_ms} "
+            f"status={status_code} provider_error={type(e).__name__}"
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=_provider_error_detail(status_code),
+        )
 
 
 def _require_plugin_auth(authorization: Optional[str]) -> None:
@@ -302,8 +371,8 @@ def _require_plugin_auth(authorization: Optional[str]) -> None:
     These routes spend money or act with the server's credentials — a
     Firecrawl scrape, a Dify message, a LiveKit publish token, an
     OpenHands task — so they must not stay open when the operator has
-    told the server it is exposed. Unset means open, matching /api/chat
-    and the existing web UI.
+    told the server it is exposed. Unset is permitted only for local
+    development; cloud startup refuses it.
     """
     _require_conductor_key(authorization)
 
@@ -484,7 +553,10 @@ async def openhands_status(
 
 
 @app.post("/api/voice-chat")
-async def voice_chat(audio: UploadFile = File(...)):
+async def voice_chat(
+    audio: UploadFile = File(...),
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Voice-based chat endpoint.
     Accepts audio input, transcribes it, generates response, and returns audio.
@@ -495,21 +567,21 @@ async def voice_chat(audio: UploadFile = File(...)):
     Returns:
         JSON with transcription, response text, and URL to audio response
     """
+    _require_plugin_auth(authorization)
+    audio_id = str(uuid.uuid4())
     try:
         # Save uploaded audio temporarily
-        audio_id = str(uuid.uuid4())
         input_path = TEMP_DIR / f"input_{audio_id}.webm"
 
         with open(input_path, "wb") as f:
             content = await audio.read()
             f.write(content)
 
-        logger.info(f"Received audio file: {input_path}")
+        logger.info(f"Received audio request_id={audio_id}")
 
         # Transcribe audio to text
         vp = get_voice_processor_instance()
         transcription = await vp.transcribe_audio(input_path)
-        logger.info(f"Transcription: {transcription}")
 
         # Get response from conductor
         result = get_conductor().chat(query=transcription)
@@ -534,8 +606,15 @@ async def voice_chat(audio: UploadFile = File(...)):
         }
 
     except Exception as e:
-        logger.error(f"Error in voice chat endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        status_code = _provider_error_status(e)
+        logger.error(
+            f"Voice chat failed request_id={audio_id} "
+            f"provider_error={type(e).__name__}"
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=_provider_error_detail(status_code),
+        )
 
 
 @app.get("/api/audio/{filename}")
@@ -562,7 +641,10 @@ async def get_audio(filename: str):
 
 
 @app.post("/api/transcribe")
-async def transcribe(audio: UploadFile = File(...)):
+async def transcribe(
+    audio: UploadFile = File(...),
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Transcribe audio to text only.
 
@@ -572,6 +654,7 @@ async def transcribe(audio: UploadFile = File(...)):
     Returns:
         Transcribed text
     """
+    _require_plugin_auth(authorization)
     try:
         # Save temporarily
         audio_id = str(uuid.uuid4())
@@ -590,12 +673,20 @@ async def transcribe(audio: UploadFile = File(...)):
         return {"transcription": transcription}
 
     except Exception as e:
-        logger.error(f"Error in transcribe endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        status_code = _provider_error_status(e)
+        logger.error(f"Transcribe failed provider_error={type(e).__name__}")
+        raise HTTPException(
+            status_code=status_code,
+            detail=_provider_error_detail(status_code),
+        )
 
 
 @app.post("/api/synthesize")
-async def synthesize(text: str, voice: Optional[str] = None):
+async def synthesize(
+    text: str,
+    voice: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
     """
     Synthesize speech from text.
 
@@ -606,6 +697,7 @@ async def synthesize(text: str, voice: Optional[str] = None):
     Returns:
         URL to audio file
     """
+    _require_plugin_auth(authorization)
     try:
         audio_id = str(uuid.uuid4())
         output_path = TEMP_DIR / f"synth_{audio_id}.mp3"
@@ -619,8 +711,12 @@ async def synthesize(text: str, voice: Optional[str] = None):
         return {"audio_url": f"/api/audio/{output_path.name}"}
 
     except Exception as e:
-        logger.error(f"Error in synthesize endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        status_code = _provider_error_status(e)
+        logger.error(f"Synthesize failed provider_error={type(e).__name__}")
+        raise HTTPException(
+            status_code=status_code,
+            detail=_provider_error_detail(status_code),
+        )
 
 
 @app.get("/api/voices")
@@ -661,10 +757,10 @@ MAX_TRANSCRIPT_CHARS = 12_000
 
 
 def _require_conductor_key(authorization: Optional[str]) -> None:
-    """Enforce CONDUCTOR_API_KEY on the OpenAI-compatible endpoints.
+    """Enforce CONDUCTOR_API_KEY on every credit-spending endpoint.
 
-    Unset means open, matching /api/chat. Set it whenever this server is
-    reachable from the internet: these endpoints spend your LLM credits.
+    Unset means open for local development. Cloud startup refuses an unset
+    key before the app begins accepting requests.
     """
     expected = settings.conductor_key()
     if not expected:
@@ -702,7 +798,13 @@ def _flatten_messages(messages: List[ChatMessage]) -> str:
     return f"Conversation so far:\n{transcript}\n\nLatest message:\n{query}"
 
 
-def _completion_payload(text: str, model: str, completion_id: str) -> Dict[str, Any]:
+def _completion_payload(
+    text: str,
+    model: str,
+    completion_id: str,
+    sources: Optional[List[Dict[str, Any]]] = None,
+    usage: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
     """Build a non-streaming chat-completion response body."""
     return {
         "id": completion_id,
@@ -716,10 +818,49 @@ def _completion_payload(text: str, model: str, completion_id: str) -> Dict[str, 
                 "finish_reason": "stop",
             }
         ],
-        # Token accounting isn't tracked across the providers the conductor
-        # fronts; zeros keep the shape valid for clients that read it.
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage or {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+        "sources": sources or [],
     }
+
+
+def _append_sources(text: str, sources: List[Dict[str, Any]]) -> str:
+    """Add readable markdown citations so clients always display evidence."""
+    if not sources or "\nSources:\n" in text:
+        return text
+    lines = []
+    for source in sources:
+        url = str(source.get("url") or "").strip()
+        if not url.startswith(("https://", "http://")):
+            continue
+        title = " ".join(str(source.get("title") or url).split())
+        title = title.replace("[", "").replace("]", "")
+        lines.append(f"- [{title}]({url})")
+    if not lines:
+        return text
+    return f"{text.rstrip()}\n\nSources:\n" + "\n".join(lines)
+
+
+def _provider_error_status(error: Exception) -> int:
+    """Map upstream SDK failures to a stable gateway HTTP status."""
+    status_code = getattr(error, "status_code", None)
+    if status_code == 429:
+        return 429
+    name = type(error).__name__.lower()
+    if status_code in (408, 504) or "timeout" in name:
+        return 504
+    return 502
+
+
+def _provider_error_detail(status_code: int) -> str:
+    if status_code == 429:
+        return "Upstream provider rate limit reached"
+    if status_code == 504:
+        return "Upstream provider timed out"
+    return "Upstream provider request failed"
 
 
 def _sse_chunk(
@@ -760,12 +901,14 @@ def _stream_completion(generate, model: str, completion_id: str):
     try:
         text = generate()
     except Exception as e:
-        logger.error(f"Error generating streamed completion: {e}")
+        logger.error(
+            f"Stream generation failed provider_error={type(e).__name__}"
+        )
         yield _sse_chunk(
             completion_id,
             model,
             created,
-            {"content": f"\n\n[error: {type(e).__name__}: {e}]"},
+            {"content": "\n\n[error: upstream provider request failed]"},
         )
         yield _sse_chunk(completion_id, model, created, {}, finish_reason="stop")
         yield "data: [DONE]\n\n"
@@ -830,26 +973,68 @@ async def chat_completions(
     model = CONDUCTOR_MODEL_ID
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
 
-    def generate() -> str:
+    def generate_result() -> Dict[str, Any]:
         # request.user scopes durable memory per client-supplied end user;
         # None falls back to the shared default (see MEM0_DEFAULT_USER_ID).
         return get_conductor().chat(
             query=query, user_id=request.user, url_source=latest
-        )["response"]
+        )
+
+    started = time.monotonic()
+
+    def _finish(result: Dict[str, Any]) -> str:
+        """Assemble the answer text and emit the success log line."""
+        sources_ = result.get("sources", [])
+        text_ = _append_sources(result["response"], sources_)
+        usage_ = result.get("usage") or {}
+        logger.info(
+            f"request_id={completion_id} model={model} "
+            f"latency_ms={int((time.monotonic() - started) * 1000)} "
+            f"status=200 usage={json.dumps(usage_, sort_keys=True)}"
+        )
+        return text_
 
     if request.stream:
+        # Hand the provider call to the iterator rather than running it here.
+        # _stream_completion invokes this only after the opening role chunk is
+        # flushed, so the client sees headers and a first event immediately
+        # instead of waiting out the whole request on a silent socket.
+        # StreamingResponse runs a sync generator on a worker thread, so the
+        # event loop — and /health/live with it — stays responsive throughout.
         return StreamingResponse(
-            _stream_completion(generate, model, completion_id),
+            _stream_completion(
+                lambda: _finish(generate_result()), model, completion_id
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # Non-streaming: the conductor's chat() is blocking, and this endpoint is
+    # async, so calling it directly would stall the event loop for the whole
+    # provider round trip and block every other request on the worker.
     try:
-        text = generate()
+        result = await run_in_threadpool(generate_result)
     except Exception as e:
-        logger.error(f"Error in chat completions endpoint: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    return _completion_payload(text, model, completion_id)
+        status_code = _provider_error_status(e)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        logger.error(
+            f"request_id={completion_id} model={model} latency_ms={latency_ms} "
+            f"status={status_code} provider_error={type(e).__name__}"
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=_provider_error_detail(status_code),
+        )
+    sources = result.get("sources", [])
+    text = _finish(result)
+    usage = result.get("usage") or {}
+    return _completion_payload(
+        text,
+        model,
+        completion_id,
+        sources=sources,
+        usage=usage,
+    )
 
 
 # Mount static files (will create later)

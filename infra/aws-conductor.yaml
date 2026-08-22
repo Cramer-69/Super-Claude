@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Super Claude Conductor on App Runner with SSM-backed credentials
+
+Parameters:
+  ImageIdentifier:
+    Type: String
+    Description: Immutable ECR image URI including a commit SHA tag
+  BudgetEmail:
+    Type: String
+    Description: Email recipient for monthly AWS budget alerts
+
+Resources:
+  ECRAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: super-claude-apprunner-ecr
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: build.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: super-claude-apprunner-instance
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: tasks.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-super-claude-parameters
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/super-claude/prod/*
+
+  SingleInstanceScaling:
+    Type: AWS::AppRunner::AutoScalingConfiguration
+    Properties:
+      AutoScalingConfigurationName: super-claude-single-instance
+      MaxConcurrency: 20
+      MinSize: 1
+      MaxSize: 1
+
+  ConductorService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      ServiceName: super-claude-conductor
+      AutoScalingConfigurationArn: !GetAtt SingleInstanceScaling.AutoScalingConfigurationArn
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /health/live
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 5
+      InstanceConfiguration:
+        Cpu: 1 vCPU
+        Memory: 2 GB
+        InstanceRoleArn: !GetAtt InstanceRole.Arn
+      SourceConfiguration:
+        AutoDeploymentsEnabled: false
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt ECRAccessRole.Arn
+        ImageRepository:
+          ImageRepositoryType: ECR
+          ImageIdentifier: !Ref ImageIdentifier
+          ImageConfiguration:
+            Port: "8080"
+            RuntimeEnvironmentVariables:
+              - Name: CONDUCTOR_CLOUD_MODE
+                Value: "true"
+              - Name: CONDUCTOR_PRIMARY_PROVIDER
+                Value: openai
+              - Name: OPENAI_MODEL
+                Value: gpt-5.6-terra
+              - Name: CONDUCTOR_FALLBACK_PROVIDERS
+                Value: ""
+              - Name: CONDUCTOR_MAX_FALLBACKS
+                Value: "1"
+              - Name: OPENAI_MAX_OUTPUT_TOKENS
+                Value: "800"
+              - Name: PROVIDER_MAX_RETRIES
+                Value: "1"
+              - Name: PROVIDER_TIMEOUT_SECONDS
+                Value: "45"
+              - Name: MEM0_DEFAULT_USER_ID
+                Value: john
+              - Name: FIRECRAWL_SEARCH_LIMIT
+                Value: "3"
+              - Name: FIRECRAWL_MAX_URLS_PER_QUERY
+                Value: "2"
+              - Name: FIRECRAWL_MAX_CONTENT_CHARS
+                Value: "4000"
+            RuntimeEnvironmentSecrets:
+              - Name: CONDUCTOR_API_KEY
+                Value: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/super-claude/prod/CONDUCTOR_API_KEY
+              - Name: OPENAI_API_KEY
+                Value: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/super-claude/prod/OPENAI_API_KEY
+              - Name: MEM0_API_KEY
+                Value: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/super-claude/prod/MEM0_API_KEY
+              - Name: FIRECRAWL_API_KEY
+                Value: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/super-claude/prod/FIRECRAWL_API_KEY
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: super-claude-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 25
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            ThresholdType: ABSOLUTE_VALUE
+            Threshold: 10
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            ThresholdType: ABSOLUTE_VALUE
+            Threshold: 20
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            ThresholdType: ABSOLUTE_VALUE
+            Threshold: 25
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetEmail
+
+Outputs:
+  ServiceUrl:
+    Value: !Sub https://${ConductorService.ServiceUrl}
+  ServiceArn:
+    Value: !GetAtt ConductorService.ServiceArn

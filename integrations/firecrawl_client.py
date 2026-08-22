@@ -118,8 +118,8 @@ def is_fetchable_url(url: str) -> bool:
         return True
     try:
         resolved = socket.getaddrinfo(host, None)
-    except socket.gaierror as e:
-        logger.warning(f"Could not resolve {safe_text_for_log(host)}: {e}")
+    except socket.gaierror:
+        logger.warning("Could not resolve requested Firecrawl host")
         return False
     return all(_is_public_address(ipaddress.ip_address(info[4][0])) for info in resolved)
 
@@ -182,7 +182,9 @@ class FirecrawlClient:
                 kwargs["api_url"] = settings.firecrawl_api_url
             self.client = Firecrawl(**kwargs)
         except Exception as e:
-            logger.warning(f"Could not initialize Firecrawl client: {e}")
+            logger.warning(
+                f"Could not initialize Firecrawl client: {type(e).__name__}"
+            )
             self.client = None
 
     @property
@@ -194,12 +196,12 @@ class FirecrawlClient:
         if not self.enabled:
             return None
         if not is_fetchable_url(url):
-            logger.warning(f"Refusing to scrape {safe_url_for_log(url)}")
+            logger.warning("Refusing to scrape a non-public URL")
             return None
         try:
             document = self.client.scrape(url, formats=["markdown"])
         except Exception as e:
-            logger.warning(f"Firecrawl scrape({safe_url_for_log(url)}) failed: {e}")
+            logger.warning(f"Firecrawl scrape failed: {type(e).__name__}")
             return None
         page = _as_page(document)
         if page and not page["url"]:
@@ -213,7 +215,7 @@ class FirecrawlClient:
         try:
             data = self.client.search(query, limit=limit)
         except Exception as e:
-            logger.warning(f"Firecrawl search({safe_text_for_log(query, 60)}) failed: {e}")
+            logger.warning(f"Firecrawl search failed: {type(e).__name__}")
             return []
 
         results: List[Dict[str, str]] = []
@@ -242,12 +244,12 @@ class FirecrawlClient:
         if not self.enabled:
             return []
         if not is_fetchable_url(url):
-            logger.warning(f"Refusing to crawl {safe_url_for_log(url)}")
+            logger.warning("Refusing to crawl a non-public URL")
             return []
         try:
             job = self.client.crawl(url, limit=limit, formats=["markdown"])
         except Exception as e:
-            logger.warning(f"Firecrawl crawl({safe_url_for_log(url)}) failed: {e}")
+            logger.warning(f"Firecrawl crawl failed: {type(e).__name__}")
             return []
 
         pages = []
