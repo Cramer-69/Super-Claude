@@ -303,7 +303,18 @@ class ChatCompletionsEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.json()["model"], "conductor")
 
-    def test_streaming_provider_failure_is_returned_as_gateway_error(self):
+    def test_streaming_provider_failure_is_delivered_inside_the_stream(self):
+        """A stream that has already opened reports failure as an event.
+
+        The provider call is made from inside the iterator so the client gets
+        headers and an opening role chunk immediately rather than waiting out
+        the whole request on a silent socket. That trade is deliberate and it
+        is one-way: once text/event-stream headers are on the wire there is no
+        status code left to change, so a later provider failure has to arrive
+        as a content chunk. Asserting 502 here would require going back to
+        completing the provider call before the response opened, which is the
+        stall this endpoint exists to avoid.
+        """
         conductor = MagicMock()
         conductor.chat.side_effect = RuntimeError("provider exploded")
 
@@ -315,8 +326,13 @@ class ChatCompletionsEndpointTests(unittest.TestCase):
                 json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
             )
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json()["detail"], "Upstream provider request failed")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+
+        body = response.text
+        self.assertIn("upstream provider request failed", body)
+        self.assertIn('"finish_reason": "stop"', body)
+        self.assertTrue(body.rstrip().endswith("data: [DONE]"))
 
     def test_non_stream_provider_failures_preserve_gateway_status(self):
         cases = [

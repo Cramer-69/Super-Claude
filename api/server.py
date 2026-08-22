@@ -20,6 +20,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Header
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 # NOTE: ConductorAgent is imported lazily inside get_conductor() (full mode
 # only). It pulls in ChromaDB, which is intentionally excluded from
@@ -980,8 +981,39 @@ async def chat_completions(
         )
 
     started = time.monotonic()
+
+    def _finish(result: Dict[str, Any]) -> str:
+        """Assemble the answer text and emit the success log line."""
+        sources_ = result.get("sources", [])
+        text_ = _append_sources(result["response"], sources_)
+        usage_ = result.get("usage") or {}
+        logger.info(
+            f"request_id={completion_id} model={model} "
+            f"latency_ms={int((time.monotonic() - started) * 1000)} "
+            f"status=200 usage={json.dumps(usage_, sort_keys=True)}"
+        )
+        return text_
+
+    if request.stream:
+        # Hand the provider call to the iterator rather than running it here.
+        # _stream_completion invokes this only after the opening role chunk is
+        # flushed, so the client sees headers and a first event immediately
+        # instead of waiting out the whole request on a silent socket.
+        # StreamingResponse runs a sync generator on a worker thread, so the
+        # event loop — and /health/live with it — stays responsive throughout.
+        return StreamingResponse(
+            _stream_completion(
+                lambda: _finish(generate_result()), model, completion_id
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Non-streaming: the conductor's chat() is blocking, and this endpoint is
+    # async, so calling it directly would stall the event loop for the whole
+    # provider round trip and block every other request on the worker.
     try:
-        result = generate_result()
+        result = await run_in_threadpool(generate_result)
     except Exception as e:
         status_code = _provider_error_status(e)
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -994,19 +1026,8 @@ async def chat_completions(
             detail=_provider_error_detail(status_code),
         )
     sources = result.get("sources", [])
-    text = _append_sources(result["response"], sources)
+    text = _finish(result)
     usage = result.get("usage") or {}
-    latency_ms = int((time.monotonic() - started) * 1000)
-    logger.info(
-        f"request_id={completion_id} model={model} latency_ms={latency_ms} "
-        f"status=200 usage={json.dumps(usage, sort_keys=True)}"
-    )
-    if request.stream:
-        return StreamingResponse(
-            _stream_completion(lambda: text, model, completion_id),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
     return _completion_payload(
         text,
         model,
