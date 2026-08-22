@@ -100,6 +100,14 @@ def ecr_push_policy(account_id: str, region: str) -> dict:
             {
                 "Effect": "Allow",
                 "Action": [
+                    "ecr:CreateRepository",
+                    "ecr:DescribeRepositories",
+                ],
+                "Resource": "*",
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
                     "ecr:BatchCheckLayerAvailability",
                     "ecr:CompleteLayerUpload",
                     "ecr:GetDownloadUrlForLayer",

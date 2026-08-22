@@ -6,6 +6,7 @@ from botocore.exceptions import ClientError
 
 from scripts.bootstrap_aws import (
     PARAMETER_NAMES,
+    ecr_push_policy,
     github_trust_policy,
     store_secure_parameters,
 )
@@ -74,6 +75,22 @@ class GitHubOIDCTests(unittest.TestCase):
             "sts.amazonaws.com",
         )
 
+    def test_ecr_policy_allows_repo_bootstrap_and_push(self):
+        policy = ecr_push_policy("209479275988", "us-west-2")
+        actions = {
+            action
+            for statement in policy["Statement"]
+            for action in (
+                statement["Action"]
+                if isinstance(statement["Action"], list)
+                else [statement["Action"]]
+            )
+        }
+
+        self.assertIn("ecr:CreateRepository", actions)
+        self.assertIn("ecr:DescribeRepositories", actions)
+        self.assertIn("ecr:PutImage", actions)
+
 
 class DeploymentManifestTests(unittest.TestCase):
     def test_docker_image_uses_cloud_dependencies(self):
@@ -88,6 +105,8 @@ class DeploymentManifestTests(unittest.TestCase):
 
         self.assertIn("Preflight AWS role variable", workflow)
         self.assertIn("AWS_ROLE_ARN is missing", workflow)
+        self.assertIn("Ensure ECR repository exists", workflow)
+        self.assertIn("aws ecr create-repository", workflow)
         self.assertIn("${{ github.sha }}", workflow)
         self.assertIn(":latest", workflow)
 
