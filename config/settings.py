@@ -166,8 +166,30 @@ class Settings(BaseSettings):
         )
 
     def bedrock_configured(self) -> bool:
-        """Check whether AWS Bedrock Claude is configured."""
-        return bool(self.bedrock_region())
+        """Check whether AWS Bedrock Claude is usable, not merely named.
+
+        A region string alone is not enough. Serverless hosts set AWS_REGION
+        as a matter of course while providing no credential chain behind it:
+        no instance profile, no ~/.aws/credentials, no assumed role. Treating
+        the region as proof of configuration made Bedrock win provider
+        selection on a host that could never authenticate, so boto3 raised
+        NoCredentialsError on every single request while /health still
+        reported the service as healthy.
+
+        Resolving credentials through the boto3 session covers every case the
+        chain supports — environment variables, shared config, container and
+        instance roles, SSO — without duplicating any of that logic here.
+        """
+        if not self.bedrock_region():
+            return False
+        try:
+            import boto3  # imported lazily: optional dependency
+        except ImportError:
+            return False
+        try:
+            return boto3.Session().get_credentials() is not None
+        except Exception:
+            return False
 
     def mem0_platform_key(self) -> Optional[str]:
         """Return the hosted mem0 platform key, or None if unset/placeholder."""
@@ -251,7 +273,9 @@ class Settings(BaseSettings):
             return
         raise RuntimeError(
             "No LLM API key is configured.\n"
-            "  - Bedrock:   set AWS_REGION (and optionally AWS_BEDROCK_MODEL_ID)\n"
+            "  - Bedrock:   set AWS_REGION *and* provide AWS credentials\n"
+            "               (instance role, SSO, or AWS_ACCESS_KEY_ID +\n"
+            "               AWS_SECRET_ACCESS_KEY). A region alone is ignored.\n"
             "  - Local:     copy .env.example -> .env and set OPENAI_API_KEY=sk-...\n"
             "  - Docker:    docker run -e OPENAI_API_KEY=sk-... -p 8080:8080 <image>\n"
             "  - Cloud Run: gcloud run deploy --set-secrets "
