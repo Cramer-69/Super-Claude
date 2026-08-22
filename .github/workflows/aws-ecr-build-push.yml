@@ -39,6 +39,21 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Preflight AWS role variable
+        shell: bash
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+        run: |
+          if [[ -z "$AWS_ROLE_ARN" ]]; then
+            echo "::error::AWS_ROLE_ARN is missing. Run scripts/bootstrap_aws.py after AWS and GitHub login."
+            exit 1
+          fi
+
+      - name: Run Python test suite
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-cloud.txt pytest
+          python -m pytest -q
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 

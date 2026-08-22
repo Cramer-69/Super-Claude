@@ -111,6 +111,26 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(store.backend, "platform")
         self.assertIs(store.client, hosted)
 
+    def test_hosted_search_scopes_user_with_platform_filters(self):
+        hosted = MagicMock()
+        hosted.search.return_value = {"results": [{"memory": "likes coffee"}]}
+
+        with patch("knowledge_base.memory.MEM0_AVAILABLE", True), \
+             patch("knowledge_base.memory.MemoryClient", return_value=hosted), \
+             patch("knowledge_base.memory.settings") as mock_settings:
+            mock_settings.mem0_configured.return_value = True
+            mock_settings.mem0_platform_key.return_value = "m0-test"
+            store = MemoryStore()
+
+        results = store.search("coffee", user_id="u1")
+
+        hosted.search.assert_called_once_with(
+            "coffee",
+            filters={"user_id": "u1"},
+            limit=5,
+        )
+        self.assertEqual(results, [{"memory": "likes coffee"}])
+
     def test_falls_back_to_oss_client_without_platform_key(self):
         oss = MagicMock()
 

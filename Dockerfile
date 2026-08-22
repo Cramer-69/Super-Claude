@@ -1,10 +1,5 @@
 FROM python:3.11-slim
 
-# Install system dependencies including ffmpeg for audio processing
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8080
@@ -14,8 +9,8 @@ WORKDIR /app
 # System deps (keep minimal; add build tools only if needed)
 RUN pip install --no-cache-dir --upgrade pip
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-cloud.txt ./
+RUN pip install --no-cache-dir -r requirements-cloud.txt
 
 COPY . .
 

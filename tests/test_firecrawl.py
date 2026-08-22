@@ -165,7 +165,10 @@ class FirecrawlClientTests(unittest.TestCase):
 
     def test_sdk_init_failure_disables_client(self):
         with patch("integrations.firecrawl_client.FIRECRAWL_AVAILABLE", True), \
-             patch("integrations.firecrawl_client.Firecrawl", side_effect=RuntimeError("bad key")), \
+             patch(
+                 "integrations.firecrawl_client.Firecrawl",
+                 side_effect=RuntimeError("bad key"),
+             ), \
              patch("integrations.firecrawl_client.settings") as mock_settings:
             mock_settings.firecrawl_configured.return_value = True
             mock_settings.firecrawl_key.return_value = "fc-test"
@@ -265,9 +268,13 @@ class FirecrawlClientTests(unittest.TestCase):
 
     def test_search_failure_is_swallowed(self):
         sdk = MagicMock()
-        sdk.search.side_effect = RuntimeError("boom")
+        private_query = "private-search-should-never-enter-logs"
+        sdk.search.side_effect = RuntimeError(f"provider echoed {private_query}")
 
-        self.assertEqual(self._client(sdk=sdk).search("query"), [])
+        with patch("integrations.firecrawl_client.logger") as mock_logger:
+            self.assertEqual(self._client(sdk=sdk).search(private_query), [])
+
+        self.assertNotIn(private_query, repr(mock_logger.method_calls))
 
     def test_crawl_returns_pages(self):
         sdk = MagicMock()

@@ -1,4 +1,6 @@
+import os
 import unittest
+from unittest.mock import patch
 
 from config.settings import Settings
 
@@ -69,6 +71,39 @@ class FirecrawlSettingsTests(unittest.TestCase):
 
         self.assertTrue(settings.firecrawl_configured())
         self.assertIsNone(settings.firecrawl_key())
+
+
+class BedrockSettingsTests(unittest.TestCase):
+    def test_region_alone_does_not_enable_bedrock(self):
+        with patch.dict(os.environ, {"AWS_REGION": "us-west-2"}, clear=True):
+            settings = Settings(_env_file=None)
+
+        self.assertFalse(settings.bedrock_configured())
+
+    def test_bedrock_requires_explicit_opt_in_and_region(self):
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings(
+                _env_file=None,
+                bedrock_enabled=True,
+                aws_region="us-west-2",
+            )
+
+        self.assertTrue(settings.bedrock_configured())
+
+
+class ConductorSettingsTests(unittest.TestCase):
+    def test_aws_cutover_defaults_are_bounded_and_explicit(self):
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings(_env_file=None)
+
+        self.assertEqual(settings.conductor_primary_provider, "openai")
+        self.assertEqual(settings.openai_model, "gpt-5.6-terra")
+        self.assertEqual(settings.conductor_fallback_provider_names(), [])
+        self.assertEqual(settings.conductor_max_fallbacks, 1)
+        self.assertEqual(settings.openai_max_output_tokens, 800)
+        self.assertEqual(settings.provider_timeout_seconds, 45.0)
+        self.assertEqual(settings.provider_max_retries, 1)
+        self.assertEqual(settings.mem0_default_user_id, "john")
 
 
 if __name__ == "__main__":

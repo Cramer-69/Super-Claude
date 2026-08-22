@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     xai_api_key: Optional[str] = None
     aws_region: Optional[str] = None
     aws_bedrock_model_id: Optional[str] = None
+    bedrock_enabled: bool = False
 
     # Durable cross-session memory (mem0). Off by default: requires the
     # optional `mem0ai` package and either a MEM0_API_KEY (hosted mem0
@@ -51,7 +52,7 @@ class Settings(BaseSettings):
     # opt-in, so MEM0_ENABLED is only needed for the OSS backend.
     mem0_enabled: bool = False
     mem0_api_key: Optional[str] = None
-    mem0_default_user_id: str = "default"
+    mem0_default_user_id: str = "john"
 
     # Web reading via Firecrawl (https://firecrawl.dev). Off by default:
     # requires the optional `firecrawl-py` package plus a FIRECRAWL_API_KEY
@@ -63,6 +64,7 @@ class Settings(BaseSettings):
     # Auto-read URLs the user mentions in a chat query.
     firecrawl_auto_fetch_urls: bool = True
     firecrawl_max_urls_per_query: int = 2
+    firecrawl_search_limit: int = 3
     # Allow fetching loopback/private/link-local hosts. Off by default: a
     # self-hosted Firecrawl sits inside your network, so an attacker-supplied
     # URL would otherwise reach internal services. Turn on only when you
@@ -86,12 +88,19 @@ class Settings(BaseSettings):
     # Shared HTTP timeout for the plugin clients above, in seconds.
     plugin_http_timeout: float = 30.0
 
-    # Optional bearer token guarding the OpenAI-compatible endpoints.
-    # Unset means unauthenticated, matching /api/chat.
+    # Bearer token guarding credit-spending routes. Cloud startup refuses
+    # to proceed without it; local development may remain unauthenticated.
     conductor_api_key: Optional[str] = None
 
     # Model Configuration
-    conductor_model: str = "gpt-4o-mini"
+    conductor_primary_provider: str = "openai"
+    conductor_fallback_providers: str = ""
+    conductor_max_fallbacks: int = 1
+    openai_model: str = "gpt-5.6-terra"
+    openai_max_output_tokens: int = 800
+    provider_timeout_seconds: float = 45.0
+    provider_max_retries: int = 1
+    conductor_model: str = "gpt-5.6-terra"
     embedding_model: str = "text-embedding-3-small"
     
     # Vector Database
@@ -167,7 +176,15 @@ class Settings(BaseSettings):
 
     def bedrock_configured(self) -> bool:
         """Check whether AWS Bedrock Claude is configured."""
-        return bool(self.bedrock_region())
+        return bool(self.bedrock_enabled and self.bedrock_region())
+
+    def conductor_fallback_provider_names(self) -> list[str]:
+        """Return the explicitly configured fallback order, without blanks."""
+        return [
+            name.strip().lower()
+            for name in self.conductor_fallback_providers.split(",")
+            if name.strip()
+        ][: max(0, self.conductor_max_fallbacks)]
 
     def mem0_platform_key(self) -> Optional[str]:
         """Return the hosted mem0 platform key, or None if unset/placeholder."""
@@ -245,13 +262,27 @@ class Settings(BaseSettings):
             providers.insert(0, "bedrock")
         return providers
 
+    def primary_provider_configured(self) -> bool:
+        """Whether the explicitly selected primary has usable credentials."""
+        primary = self.conductor_primary_provider.strip().lower()
+        if primary == "bedrock":
+            return self.bedrock_configured()
+        keys = {
+            "openai": self.openai_api_key,
+            "anthropic": self.anthropic_api_key,
+            "google": self.google_api_key,
+            "xai": self.xai_api_key,
+            "perplexity": self.perplexity_api_key,
+        }
+        return bool(_real_key(keys.get(primary)))
+
     def require_api_key(self) -> None:
         """Fail fast at startup with an actionable error if no key is set."""
         if self.configured_providers():
             return
         raise RuntimeError(
             "No LLM API key is configured.\n"
-            "  - Bedrock:   set AWS_REGION (and optionally AWS_BEDROCK_MODEL_ID)\n"
+            "  - Bedrock:   set BEDROCK_ENABLED=true and AWS_REGION\n"
             "  - Local:     copy .env.example -> .env and set OPENAI_API_KEY=sk-...\n"
             "  - Docker:    docker run -e OPENAI_API_KEY=sk-... -p 8080:8080 <image>\n"
             "  - Cloud Run: gcloud run deploy --set-secrets "
